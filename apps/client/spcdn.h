@@ -68,4 +68,33 @@ NSString *sp_patch_needs_update_body(NSString *news);
 NSString *sp_build_info_with(NSString *_Nullable existing, NSString *product, NSString *region,
                              NSDictionary<NSString *, NSString *> *version, NSDictionary<NSString *, NSString *> *cdns);
 
+// ---- Installing a game on the device, with no image in the app (launcher.m, sppatch.m)
+
+// The games the start screen offers, in flavors.plist's order (`order`, its ids; any other last, by name).
+// An app with client images offers the games it bundles one of (`bundled`), as it always has, and
+// *installable is empty: an update the device made of a game the app no longer bundles doesn't bring it back.
+// An app with none (built without them, so it ships no Blizzard bytes: build.sh's SP_NO_IMAGES=1) offers
+// every game in `order`, and *installable is the ones the device hasn't made an image of yet (`made`,
+// Library/spgames), which it installs itself (sp_patch_install).
+NSArray<NSString *> *sp_games(NSArray<NSString *> *order, NSArray<NSString *> *bundled, NSArray<NSString *> *made,
+                              NSSet<NSString *> *_Nullable *_Nonnull installable);
+
+// The region a game is installed in on the device: the Branch of its product's row in the device's
+// .build.info (`buildInfo`'s text: a game installed before, or game data a Mac copied), else "us", the region
+// the companion's first Config.wtf and sp_build_info_with's Tags already assume.
+NSString *sp_install_region(NSString *_Nullable buildInfo, NSString *product);
+
+// The game's .flavor.info, as Battle.net writes it in the game's folder and the companion sends it
+// (GameFiles.flavorInfo): its product, as a one-column table.
+NSString *sp_flavor_info(NSString *product);
+
+// The addons the app carries (`addons`: the app's addons/, each <name>/<name>.toc and .lua as addon/ has
+// them; apps/client/build.sh and the companion's ClientAssembly put them there) into a game's folder
+// (`game`: Documents/_<flavor>_), at Interface/AddOns/<name>/, as the companion used to copy them: SPMovie
+// on every device, SPHover with `hover` (the headset: the iPad and iPhone have a real pointer). Each file is
+// written when the game's copy is missing or its bytes differ, and left alone otherwise. Each TOC lists every
+// flavor's Interface number, so one copy suits each game. A line for the log; NO when one couldn't be
+// read or written (*line says which).
+BOOL sp_addons_place(NSString *addons, NSString *game, BOOL hover, NSString *_Nullable *_Nonnull line);
+
 NS_ASSUME_NONNULL_END
