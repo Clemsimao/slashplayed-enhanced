@@ -1,0 +1,26 @@
+# Stub project that only exists to make Xcode (re)write the team's development profiles: building it
+# for a connected device with automatic signing registers that device and adds it to the profiles.
+# regen.sh drives it; nothing here is installed or run.
+name: SPProfiles
+options:
+  deploymentTarget:
+    iOS: "26.0"
+    visionOS: "26.0"
+targets:
+  SPProfiles:
+    type: application
+    supportedDestinations: [iOS, visionOS]
+    sources: [Stub]
+    info:
+      path: Generated/Info.plist
+    entitlements:
+      path: Generated/SPProfiles.entitlements
+      properties:
+        # The client's profile carries these: Retail needs more than the default memory limit to enter the world.
+        com.apple.developer.kernel.increased-memory-limit: true
+        com.apple.developer.kernel.extended-virtual-addressing: true
+    settings:
+      base:
+        # regen.sh passes DEVELOPMENT_TEAM (SP_TEAM) and PRODUCT_BUNDLE_IDENTIFIER on the command line.
+        CODE_SIGN_STYLE: Automatic
+        GENERATE_INFOPLIST_FILE: YES

@@ -1,0 +1,6 @@
+# xcode-27 is GitHub's hosted image with Xcode 27 (GA since 2026-10-15, actions/runner-images), not a
+# self-hosted runner, but actionlint 1.7.12 doesn't know the label yet; it's listed here so it isn't
+# flagged. Drop it once actionlint knows the label.
+self-hosted-runner:
+  labels:
+    - xcode-27

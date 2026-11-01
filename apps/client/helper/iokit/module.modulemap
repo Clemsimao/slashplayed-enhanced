@@ -1,0 +1,5 @@
+module SPIOKit {
+  header "spiokit.h"
+  link framework "IOKit"
+  export *
+}

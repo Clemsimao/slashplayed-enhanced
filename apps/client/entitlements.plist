@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The device app's entitlements template: @TEAM@ and @BUNDLE_ID@ are filled in at build time (build.sh
+     here, the companion from its bundled copy). get-task-allow lets a debugger (the JIT helper's
+     debugserver, helper/) attach for the prepare at every launch. -->
+<plist version="1.0"><dict>
+  <key>application-identifier</key><string>@TEAM@.@BUNDLE_ID@</string>
+  <key>com.apple.developer.team-identifier</key><string>@TEAM@</string>
+  <key>get-task-allow</key><true/>
+  <!-- Retail needs more than the default ~5.1 GB footprint limit to enter the world. -->
+  <key>com.apple.developer.kernel.increased-memory-limit</key><true/>
+  <key>com.apple.developer.kernel.extended-virtual-addressing</key><true/>
+</dict></plist>

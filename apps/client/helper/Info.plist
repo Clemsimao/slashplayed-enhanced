@@ -1,0 +1,34 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key><string>@BUNDLE_ID@</string>
+	<key>CFBundleExecutable</key><string>SPJitHelper</string>
+	<key>CFBundleName</key><string>SPJitHelper</string>
+	<key>CFBundleDisplayName</key><string>SPJitHelper</string>
+	<key>CFBundlePackageType</key><string>XPC!</string>
+	<key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+	<key>CFBundleVersion</key><string>1</string>
+	<key>CFBundleShortVersionString</key><string>@VERSION@</string>
+	<key>CFBundleSupportedPlatforms</key><array><string>@PLATFORM@</string></array>
+	<key>DTPlatformName</key><string>@DTPLATFORM@</string>
+	<key>MinimumOSVersion</key><string>@MINOS@</string>
+	<key>UIDeviceFamily</key><array>@FAMILY@</array>
+	<key>NSExtension</key>
+	<dict>
+		<key>NSExtensionPointIdentifier</key><string>com.apple.ar.viewer</string>
+		<key>NSExtensionPrincipalClass</key><string>SPHelper</string>
+		<key>NSExtensionAttributes</key>
+		<dict>
+			<key>NSExtensionActivationRule</key><string>FALSEPREDICATE</string>
+		</dict>
+	</dict>
+	<!-- An app-type process (not a plain XPC service), one per request. -->
+	<key>XPCService</key>
+	<dict>
+		<key>ServiceType</key><string>Application</string>
+		<key>_MultipleInstances</key><true/>
+		<key>_ProcessType</key><string>App</string>
+	</dict>
+</dict>
+</plist>

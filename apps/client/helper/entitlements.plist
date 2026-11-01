@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- The JIT helper's entitlements template (PlugIns/SPJitHelper.appex): @TEAM@ and @BUNDLE_ID@ (the app's
+     bundle ID plus .helper) are filled in at build time, as for the app's own (../entitlements.plist).
+     None of the app's memory entitlements; get-task-allow because its development profile carries it and
+     Xcode signs development extensions with it. -->
+<plist version="1.0"><dict>
+  <key>application-identifier</key><string>@TEAM@.@BUNDLE_ID@</string>
+  <key>com.apple.developer.team-identifier</key><string>@TEAM@</string>
+  <key>get-task-allow</key><true/>
+</dict></plist>

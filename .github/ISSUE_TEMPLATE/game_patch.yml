@@ -1,0 +1,57 @@
+# The companion's "Report It…" link opens this form pre-filled through the field IDs below
+# (BindCheck.issueURL in apps/companion/Sources/BindCheck.swift): flavor, game-build, platform,
+# companion-version, imports. Keep them in step, and keep them inputs and textareas: GitHub only
+# pre-fills those reliably from the query string, not dropdowns.
+name: New game patch broke it
+description: The companion says your game version isn't supported by this version of SlashPlayed yet, or the device says "This patch needs a SlashPlayed update".
+title: "<Flavor> <build> isn't supported"
+labels: [game-patch]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A game patch can add functions the SlashPlayed shims don't provide yet. First check **SlashPlayed Companion › Check for Updates…**: a newer release may already support it. If not, the companion's **Report It…** link fills this form in for you. If the device found the patch first ("This patch needs a SlashPlayed update"), fill it in from the device's log: **Help › Export Diagnostics…** on the Mac, then the `imports:` lines in `spconsole.log`.
+
+        A maintainer with the game installed regenerates the shims for the new build, so there's nothing to attach from the game itself. **Never paste your Battle.net sign-in, Battle.net preference contents, or game files here.**
+  - type: input
+    id: flavor
+    attributes:
+      label: Flavor
+      placeholder: Classic Era, TBC Anniversary, MoP Classic, or Retail
+    validations:
+      required: true
+  - type: input
+    id: game-build
+    attributes:
+      label: Game build
+      placeholder: 1.15.8.65300
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: The shims the check ran against (`xros` for Vision Pro, `ios` for the iPad and iPhone).
+      placeholder: xros
+    validations:
+      required: true
+  - type: input
+    id: companion-version
+    attributes:
+      label: Companion version
+      placeholder: 1.0.1
+    validations:
+      required: true
+  - type: textarea
+    id: imports
+    attributes:
+      label: Unresolved imports
+      description: The functions the companion listed as missing (or the device logged as `imports:`), one per line (library and symbol).
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
+      description: For example, whether the other flavors or the other platforms still work, and whether the companion or the device found it.

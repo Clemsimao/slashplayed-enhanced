@@ -1,0 +1,586 @@
+// The patch check. Once the game is picked and before anything else per launch (the sign-in, the helper),
+// the launcher asks Blizzard's patch service which build of the game is current and compares it with the
+// image's stamp (spbuild-<flavor>, launcher.m's image_build). Up to date shows nothing, and so does a check
+// that couldn't be made (offline, a timeout, an answer without the row): it costs a few seconds at most and
+// never stops a launch.
+//
+// A newer build out shows a screen that says so, and whether this SlashPlayed can run the new build: it
+// fetches the new client's arm64 slice from Blizzard's CDN (spcdn.m, about 50 MB; on cellular or in Low
+// Data Mode only if the person says so) and checks its imports against the shims' exports.json the app
+// carries (spbind.m), as the companion's bind check would. It binds: "Update on your Mac to play it" (the
+// companion builds the new image from the CDN), and Update too when the device holds a signing identity the
+// companion sent it (spsign.m): the device then makes the new image itself (update, below) and loads it
+// from Library/spgames/. It doesn't: "This patch needs a SlashPlayed update". Couldn't tell: the first.
+// Play Anyway goes on with the image it has. The slice is kept in Library/spslice/ with its own stamp, so a
+// later launch doesn't fetch it again (and an update builds from it).
+//
+// The service is https://<region>.version.battle.net/v2/products/<product>/versions: a table shaped like
+// .build.info, one row per region. The region is the stamp's Branch (the install's), and its row's
+// BuildConfig is the build's identity, the stamp's Build Key; VersionsName is the version to show. Its
+// sibling /cdns names the region's CDN servers. $SP_PATCH_SERVICE replaces the base (everything before
+// /<product>/versions) for tests: a URL, or a path relative to the app's home directory, read as files
+// (Library/sppatchtest, with Library/sppatchtest/<product>/versions copied in by devicectl; a cdns file
+// there is optional, the real service's is used without one). $SP_PATCH_CELLULAR=1 treats the network as
+// cellular, for testing the question, and $SP_PATCH_CHOOSE presses a button (wait_for_choice).
+//
+// $SP_PATCH_DRILL is the patch drill (drill_symbol): it shows the screen with no newer build on the CDN.
+// Only a pre-release companion's Play (BindCheck.deviceDrill) and run.sh pass it.
+#import <Foundation/Foundation.h>
+#import <Network/Network.h>
+#import <UIKit/UIKit.h>
+#include <stdatomic.h>
+#import "spassemble.h"
+#import "spbind.h"
+#import "spcdn.h"
+#import "spsign.h"
+
+void sp_launch_say(NSString *s);  // launcher.m
+void (^sp_launch_uikit(void))(double);  // launcher.m
+NSString *sp_flavor_name(NSString *flavor);  // launcher.m
+NSDictionary *sp_flavor_entry(NSString *flavor);  // launcher.m
+void sp_launch_build_version(uint32_t *platform, uint32_t *minOS);  // launcher.m
+UIViewController *sp_scene_root(void);  // spvpn.m
+NSString *sp_device_noun(void);  // spjit.m
+
+static void say(NSString *s) { sp_launch_say([@"patch: " stringByAppendingString:s]); }
+// The update's own lines, and the image chosen: "update: ", as the launcher's after the load.
+static void say_update(NSString *s) { sp_launch_say([@"update: " stringByAppendingString:s]); }
+
+static double now(void) { return CFAbsoluteTimeGetCurrent(); }
+
+// The service check's budget, connect to answer: a bad network costs this much at most.
+static const double timeout = 3;
+
+// The service's `table` (versions, cdns) for `product`, or nil and *problem. Waits with `pump`, so on iOS
+// the scene keeps running (the launch watchdog). `optionalFile`: with a test path in $SP_PATCH_SERVICE and
+// no such file there, the real service's.
+static NSString *fetch(NSString *product, NSString *region, NSString *table, BOOL optionalFile, void (^pump)(double),
+                       NSString **problem) {
+    NSString *base = NSProcessInfo.processInfo.environment[@"SP_PATCH_SERVICE"];
+    NSString *tail = [NSString stringWithFormat:@"/%@/%@", product, table];
+    if (base.length && [base rangeOfString:@"://"].location == NSNotFound) {
+        NSString *path = [[NSHomeDirectory() stringByAppendingPathComponent:base] stringByAppendingString:tail];
+        NSString *text = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:nil];
+        if (text || !optionalFile) {
+            if (!text) *problem = [NSString stringWithFormat:@"no test file %@%@", base, tail];
+            return text;
+        }
+        base = nil;
+    }
+    if (!base.length) base = [NSString stringWithFormat:@"https://%@.version.battle.net/v2/products", region];
+    NSURL *url = [NSURL URLWithString:[base stringByAppendingString:tail]];
+    if (!url) {
+        *problem = @"not a URL";
+        return nil;
+    }
+    NSURLSessionConfiguration *config = NSURLSessionConfiguration.ephemeralSessionConfiguration;
+    config.timeoutIntervalForRequest = timeout;
+    config.timeoutIntervalForResource = timeout;
+    config.waitsForConnectivity = NO;  // offline fails now, rather than at the timeout
+    config.requestCachePolicy = NSURLRequestReloadIgnoringLocalCacheData;
+    NSURLSession *session = [NSURLSession sessionWithConfiguration:config];
+    // Set on the session's queue, read here: done last.
+    __block NSString *text = nil, *why = nil;
+    static atomic_bool done;
+    atomic_store(&done, false);
+    NSURLSessionDataTask *task = [session dataTaskWithURL:url completionHandler:^(NSData *data, NSURLResponse *r, NSError *e) {
+        NSInteger status = [r isKindOfClass:NSHTTPURLResponse.class] ? ((NSHTTPURLResponse *)r).statusCode : 0;
+        if (e) why = [NSString stringWithFormat:@"%@ %ld", e.domain, (long)e.code];
+        else if (status != 200) why = [NSString stringWithFormat:@"HTTP %ld", (long)status];
+        else if (!(text = [[NSString alloc] initWithData:data encoding:NSUTF8StringEncoding])) why = @"not text";
+        atomic_store(&done, true);
+    }];
+    [task resume];
+    // A little past the session's own timeout, in case it doesn't fire.
+    for (double end = now() + timeout + 0.5; !atomic_load(&done) && now() < end;) pump(0.05);
+    [session invalidateAndCancel];
+    if (!atomic_load(&done)) {
+        *problem = @"timed out";
+        return nil;
+    }
+    *problem = why;
+    return text;
+}
+
+// Whether the network costs the person: cellular (or a hotspot), or Low Data Mode. Not known in a second
+// counts as not.
+static BOOL costly_network(void (^pump)(double)) {
+    if ([NSProcessInfo.processInfo.environment[@"SP_PATCH_CELLULAR"] isEqual:@"1"]) return YES;
+    nw_path_monitor_t monitor = nw_path_monitor_create();
+    static atomic_int state;  // -1 until the first path, then 0 or 1
+    atomic_store(&state, -1);
+    nw_path_monitor_set_queue(monitor, dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0));
+    nw_path_monitor_set_update_handler(monitor, ^(nw_path_t path) {
+        atomic_store(&state, nw_path_is_expensive(path) || nw_path_is_constrained(path));
+    });
+    nw_path_monitor_start(monitor);
+    for (double end = now() + 1; atomic_load(&state) < 0 && now() < end;) pump(0.05);
+    nw_path_monitor_cancel(monitor);
+    return atomic_load(&state) == 1;
+}
+
+// ---- the screen
+
+UIViewController *sp_patch_screen(void (^choose)(NSInteger index));  // sppatchscreen.swift
+void sp_patch_show(UIViewController *screen, NSString *heading, NSString *message, NSString *_Nullable note,
+                   NSArray<NSString *> *buttons);
+void sp_screen_status(UIViewController *screen, NSString *text);  // spstyle.swift
+
+// The SwiftUI screen (sppatchscreen.swift, in the start screen's look) and what the wait reads: the button
+// tapped and the titles shown, kept here so $SP_PATCH_CHOOSE finds a button by its title.
+@interface SPPatchController : NSObject
+@property (nonatomic, readonly) UIViewController *view;
+@property (nonatomic) NSInteger choice;  // the button tapped (-1 until one is); read by the wait
+@property (nonatomic, copy) NSArray<NSString *> *titles;  // the buttons shown now
+@end
+
+@implementation SPPatchController
+
+- (instancetype)init {
+    if (!(self = [super init])) return nil;
+    __weak SPPatchController *me = self;  // else the screen's block would keep this alive
+    _view = sp_patch_screen(^(NSInteger i) { me.choice = i; });
+    _choice = -1;
+    return self;
+}
+
+// What the screen says now: the heading, what to do, and a quieter `note` under it (nil for none). With
+// `buttons`, it waits for one (the first is the screen's action, the others gold text); without, a spinner
+// turns. A new state clears the progress line.
+- (void)setHeading:(NSString *)heading body:(NSString *)body note:(NSString *)note buttons:(NSArray<NSString *> *)titles {
+    self.choice = -1;
+    self.titles = titles;
+    sp_patch_show(_view, heading, body, note, titles);
+}
+
+// The progress line, under the same heading, words, and buttons: the download's MB count.
+- (void)setStatus:(NSString *)status {
+    sp_screen_status(_view, status);
+}
+@end
+
+// The screen, presented on the scene's root (nil when there's no screen to show it on). Sets *pump to UIKit's.
+static SPPatchController *present(void (^*pump)(double)) {
+    // It waits on the person: UIKit has to be up for the launch watchdog (on iOS it already is).
+    void (^ui)(double) = sp_launch_uikit();
+    UIViewController *root = ui ? sp_scene_root() : nil;
+    if (!root) {
+        say(@"no screen to say so on: going on");
+        return nil;
+    }
+    *pump = ui;
+    SPPatchController *screen = [SPPatchController new];  // full screen, pinned Dark (LauncherHost)
+    // Checked, as splogin.m's: UIKit refuses a presentation while the root still presents another.
+    __block BOOL shown = NO;
+    [root presentViewController:screen.view animated:NO completion:^{ shown = YES; }];
+    for (double end = now() + 5; !shown && now() < end;) ui(0.05);
+    if (!shown || !screen.view.presentingViewController) {
+        say([NSString stringWithFormat:@"the newer-build screen didn't show (the root presents %@)", root.presentedViewController]);
+        return nil;
+    }
+    // The companion follows this line and Play Anyway's (ClientLauncher.Marker.newerBuild, playAnyway).
+    say(@"showing the newer-build screen");
+    return screen;
+}
+
+// $SP_PATCH_CHOOSE=<a button's title> (Update, Play Anyway, Download, Not Now) presses it a second after it
+// shows, for headless tests.
+static NSInteger wait_for_choice(SPPatchController *screen, void (^pump)(double)) {
+    NSUInteger hook = [screen.titles indexOfObject:NSProcessInfo.processInfo.environment[@"SP_PATCH_CHOOSE"] ?: @""];
+    if (hook != NSNotFound) {
+        for (double end = now() + 1; now() < end;) pump(0.05);
+        say([NSString stringWithFormat:@"%@ pressed by the test hook", screen.titles[hook]]);
+        return (NSInteger)hook;
+    }
+    while (screen.choice < 0) pump(0.1);
+    return screen.choice;
+}
+
+static void dismiss(SPPatchController *screen, void (^pump)(double)) {
+    // Until it's gone: the sign-in, LocalDevVPN, and pairing screens may be presented next.
+    UIViewController *root = screen.view.presentingViewController;
+    __block BOOL gone = NO;
+    [screen.view dismissViewControllerAnimated:NO completion:^{ gone = YES; }];
+    for (double end = now() + 5; !gone && now() < end;) pump(0.05);
+    // The input view (spevent.m) takes the keys back.
+    [root.view becomeFirstResponder];
+}
+
+// ---- the patch drill
+
+// $SP_PATCH_DRILL rehearses a newer build without one on the CDN (or any file of Blizzard's in the test):
+// the service's current build counts as newer than the image even when it's the same, so the screen shows,
+// its slice is fetched (or kept), and it's checked. `binds` leaves the check alone (it binds: "Update on
+// your Mac" or Update); any other value is a symbol withheld from the app's shims for the check, as the
+// companion's SPPatchDrillImport (BindCheck.Manifest.withheld): "This patch needs a SlashPlayed update".
+// Returns whether the drill is on, and *symbol the withheld one (nil for binds).
+static BOOL drill(NSString **symbol) {
+    NSString *value = NSProcessInfo.processInfo.environment[@"SP_PATCH_DRILL"];
+    *symbol = [value isEqual:@"binds"] ? nil : value;
+    return value.length > 0;
+}
+
+// ---- the check of the new build
+
+// What the check of a newer build found.
+typedef enum { binds, needs_update, unknown } verdict;
+
+static NSString *stamp_text(NSString *product, NSString *region, NSDictionary<NSString *, NSString *> *row) {
+    // ClientAssembly.Stamp's layout, for the build the slice is.
+    return [NSString stringWithFormat:@"Product!STRING:0|Branch!STRING:0|Build Key!HEX:16|Version!STRING:0\n%@|%@|%@|%@\n",
+                                      product, region, row[@"BuildConfig"], row[@"VersionsName"]];
+}
+
+// The newer build's arm64 slice in Library/spslice/ (<flavor>.arm64 and its stamp, spbuild-<flavor>):
+// kept from an earlier launch if it's this build, else fetched, asking first on a costly network. nil and
+// *why if there's none.
+static NSString *new_slice(NSString *flavor, NSString *product, NSString *region, NSDictionary<NSString *, NSString *> *row,
+                           double megabytes, SPPatchController *screen, NSString *heading, NSString *note, void (^pump)(double),
+                           NSString **why) {
+    NSString *dir = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/spslice"];
+    NSString *slice = [dir stringByAppendingPathComponent:[flavor stringByAppendingString:@".arm64"]];
+    NSString *stamp = [dir stringByAppendingPathComponent:[@"spbuild-" stringByAppendingString:flavor]];
+    NSDictionary *kept = sp_table_row([NSString stringWithContentsOfFile:stamp encoding:NSUTF8StringEncoding error:nil], @"Product", product);
+    if ([kept[@"Build Key"] isEqual:row[@"BuildConfig"]] && [NSFileManager.defaultManager fileExistsAtPath:slice]) {
+        say([NSString stringWithFormat:@"slice: %@ %@ kept from an earlier launch", product, row[@"VersionsName"]]);
+        return slice;
+    }
+    if (costly_network(pump)) {
+        say(@"on cellular or Low Data Mode: asking before the download");
+        [screen setHeading:heading
+                      body:[NSString stringWithFormat:@"To check whether SlashPlayed can run it, this %@ downloads about "
+                                                      @"%.0f MB from Blizzard. You're on cellular data or Low Data Mode.",
+                                                      sp_device_noun(), megabytes]
+                      note:note
+                   buttons:@[@"Download", @"Not Now"]];
+        if (wait_for_choice(screen, pump) != 0) {
+            say(@"Not Now: no download");
+            *why = @"not downloaded on a costly network";
+            return nil;
+        }
+        say(@"Download");
+    }
+    // The words stay put while the download counts in the status line.
+    [screen setHeading:heading body:@"Checking whether SlashPlayed can run it…" note:note buttons:@[]];
+    [screen setStatus:[NSString stringWithFormat:@"Downloading about %.0f MB from Blizzard", megabytes]];
+    double t = now();
+    NSString *problem = nil;
+    NSString *cdns = fetch(product, region, @"cdns", YES, pump, &problem);
+    NSArray<NSURL *> *servers = cdns ? sp_cdn_servers(sp_table_row(cdns, @"Name", region) ?: @{}) : @[];
+    if (!servers.count) {
+        *why = [NSString stringWithFormat:@"no CDN servers (%@)", problem ?: [NSString stringWithFormat:@"no %@ row", region]];
+        return nil;
+    }
+    NSString *client = sp_flavor_entry(flavor)[@"client"];
+    if (!client.length) {
+        *why = @"flavors.plist has no client path";
+        return nil;
+    }
+    [NSFileManager.defaultManager createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+    // The stamp goes first and comes back last, so one is only ever beside a whole slice of its build.
+    [NSFileManager.defaultManager removeItemAtPath:stamp error:nil];
+    // The download, on the screen as it goes: one took 41.7 s (2–7 s otherwise) behind a bare spinner. The
+    // slice is a part of the client's file, so its size is known only roughly (`megabytes`, the image's).
+    __block double shown = -1;
+    SPFetch session = sp_cdn_session(pump, 20, ^(unsigned long long received) {
+        double mb = floor(received / 1e6);
+        if (mb == shown) return;
+        shown = mb;
+        [screen setStatus:[NSString stringWithFormat:@"Downloading from Blizzard: %.0f of about %.0f MB",
+                                                     MIN(mb, megabytes), megabytes]];
+    });
+    __block unsigned long long bytes = 0;
+    __block unsigned requests = 0;
+    SPFetch counted = ^NSData *(NSURL *url, NSRange range, NSString **p) {
+        NSData *d = session(url, range, p);
+        bytes += d.length;
+        requests++;
+        return d;
+    };
+    if (!sp_cdn_slice(servers, row[@"BuildConfig"], row[@"CDNConfig"], client, region, counted, slice, &problem)) {
+        *why = [@"the download failed: " stringByAppendingString:problem];
+        say([NSString stringWithFormat:@"slice: %@ %@ failed after %.1f MB in %u requests, %.1f s", product,
+                                       row[@"VersionsName"], bytes / 1e6, requests, now() - t]);
+        return nil;
+    }
+    [stamp_text(product, region, row) writeToFile:stamp atomically:YES encoding:NSUTF8StringEncoding error:nil];
+    unsigned long long size = [NSFileManager.defaultManager attributesOfItemAtPath:slice error:nil].fileSize;
+    say([NSString stringWithFormat:@"slice: %@ %@, %.1f MB, fetched %.1f MB in %u requests, %.1f s (Library/spslice/%@.arm64)",
+                                   product, row[@"VersionsName"], size / 1e6, bytes / 1e6, requests, now() - t, flavor]);
+    return slice;
+}
+
+// Whether the newer build binds against the app's shims, with the screen up meanwhile. *why for unknown.
+static verdict check_new_build(NSString *flavor, NSString *image, NSString *product, NSString *region,
+                               NSDictionary<NSString *, NSString *> *row, SPPatchController *screen, NSString *heading,
+                               NSString *note, void (^pump)(double), NSString **why) {
+    NSString *exports = [NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:@"exports.json"];
+    NSData *manifest = [NSData dataWithContentsOfFile:exports options:NSDataReadingMappedIfSafe error:nil];
+    if (!manifest) {
+        *why = @"the app has no exports.json";
+        return unknown;
+    }
+    // The new slice is about the size of this image (also thinned to arm64).
+    double megabytes = [NSFileManager.defaultManager attributesOfItemAtPath:image error:nil].fileSize / 1e6;
+    NSString *slice = new_slice(flavor, product, region, row, megabytes ?: 50, screen, heading, note, pump, why);
+    if (!slice) return unknown;
+    double t = now();
+    NSUInteger total = 0;
+    NSString *problem = nil, *withheld = nil;
+    drill(&withheld);
+    if (withheld.length) say([@"drill: withholding " stringByAppendingString:withheld]);
+    NSArray<NSString *> *unresolved = sp_bind_unresolved(
+        [NSData dataWithContentsOfFile:slice options:NSDataReadingMappedIfSafe error:nil] ?: [NSData data], manifest,
+        withheld.length ? [NSSet setWithObject:withheld] : nil, &total, &problem);
+    if (!unresolved) {
+        *why = [@"its imports couldn't be read: " stringByAppendingString:problem];
+        return unknown;
+    }
+    say([NSString stringWithFormat:@"imports: %lu of %lu resolve against the app's shims (%.1f s)",
+                                   (unsigned long)(total - unresolved.count), (unsigned long)total, now() - t]);
+    for (NSString *u in [unresolved subarrayWithRange:NSMakeRange(0, MIN(unresolved.count, 10))])
+        say([@"imports: UNRESOLVED " stringByAppendingString:u]);
+    if (unresolved.count > 10) say([NSString stringWithFormat:@"imports: … and %lu more", (unsigned long)unresolved.count - 10]);
+    return unresolved.count ? needs_update : binds;
+}
+
+// ---- the update on the device
+
+// Updates the device to the newer build from its kept slice (Library/spslice/<flavor>.arm64, new_slice): the
+// build's configs into Documents/Data/config/ (spcdn.m, the bytes the companion's BlizzardCDN.configData
+// gives), then the image assembled (spassemble.m) and signed with the device's identity (spsign.m) into
+// Library/spgames/wow-<flavor>, its stamp beside it last (spgames/spbuild-<flavor>, the slice's stamp's
+// layout), so a stamp is only ever beside a whole image of its build. Configs first: they're named by their
+// content, so they're harmless to the old build, and a failure leaves no image. The new .build.info
+// (*buildInfo) isn't written here: the launcher writes it once the image has loaded, so an image dlopen
+// refuses leaves the old build's row beside the old image. The new image's path, or nil and *why.
+static NSString *update(NSString *flavor, NSString *product, NSString *region, NSDictionary<NSString *, NSString *> *row,
+                        void (^pump)(double), NSString **buildInfo, NSString **why) {
+    NSString *home = NSHomeDirectory(), *name = [@"wow-" stringByAppendingString:flavor];
+    NSData *slice = [NSData dataWithContentsOfFile:[home stringByAppendingPathComponent:
+                                                    [NSString stringWithFormat:@"Library/spslice/%@.arm64", flavor]]
+                                           options:NSDataReadingMappedIfSafe error:nil];
+    NSString *map = [NSString stringWithContentsOfFile:[NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:@"rewrite-map.txt"]
+                                              encoding:NSUTF8StringEncoding error:nil];
+    if (!slice || !map) {
+        *why = slice ? @"the app has no rewrite-map.txt" : @"the new version's download isn't on this device any more";
+        return nil;
+    }
+    double t = now();
+    NSString *problem = nil;
+    NSString *cdns = fetch(product, region, @"cdns", YES, pump, &problem);
+    NSDictionary<NSString *, NSString *> *cdnsRow = cdns ? sp_table_row(cdns, @"Name", region) : nil;
+    NSArray<NSURL *> *servers = cdnsRow ? sp_cdn_servers(cdnsRow) : @[];
+    if (!servers.count) {
+        *why = [NSString stringWithFormat:@"Blizzard's patch service named no CDN (%@)", problem ?: [NSString stringWithFormat:@"no %@ row", region]];
+        return nil;
+    }
+    SPFetch session = sp_cdn_session(pump, 20, nil);
+    NSString *data = [home stringByAppendingPathComponent:@"Documents/Data"];
+    unsigned long long bytes = 0;
+    unsigned fetched = 0, kept = 0;
+    for (NSString *key in @[row[@"BuildConfig"] ?: @"", row[@"CDNConfig"] ?: @"", row[@"KeyRing"] ?: @""]) {
+        if (!key.length) continue;
+        unsigned long long n = 0;
+        if (!sp_cdn_store_config(servers, key, session, data, &n, &problem)) {
+            *why = [@"its game data's configs couldn't be fetched: " stringByAppendingString:problem];
+            return nil;
+        }
+        if (n) fetched++, bytes += n;
+        else kept++;
+    }
+    say_update([NSString stringWithFormat:@"configs: %u fetched (%.1f KB), %u already there, %.1f s", fetched, bytes / 1e3, kept, now() - t]);
+
+    uint32_t platform = 0, minOS = 0;
+    sp_launch_build_version(&platform, &minOS);
+    t = now();
+    NSArray<NSString *> *changes = nil;
+    NSData *image = sp_assemble(slice, map, platform, minOS, &changes, &problem);
+    if (!image) {
+        *why = [@"its image couldn't be made: " stringByAppendingString:problem];
+        return nil;
+    }
+    say_update([NSString stringWithFormat:@"assembled %.1f MB in %.3f s (%lu retype changes)", image.length / 1e6, now() - t,
+                                   (unsigned long)changes.count]);
+    NSString *unsignedImage = [NSTemporaryDirectory() stringByAppendingPathComponent:[@"spunsigned-" stringByAppendingString:name]];
+    if (![image writeToFile:unsignedImage atomically:YES]) {
+        *why = @"its image couldn't be written";
+        return nil;
+    }
+    image = nil;
+    NSString *dir = [home stringByAppendingPathComponent:@"Library/spgames"];
+    NSString *dest = [dir stringByAppendingPathComponent:name], *signing = [dest stringByAppendingString:@".signing"];
+    NSString *stamp = [dir stringByAppendingPathComponent:[@"spbuild-" stringByAppendingString:flavor]];
+    [NSFileManager.defaultManager createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+    t = now();
+    BOOL ok = sp_sign_with_identity(unsignedImage, signing, name, &problem);
+    [NSFileManager.defaultManager removeItemAtPath:unsignedImage error:nil];
+    if (!ok) {
+        *why = [@"its image couldn't be signed: " stringByAppendingString:problem];
+        return nil;
+    }
+    say_update([NSString stringWithFormat:@"signed in %.3f s", now() - t]);
+    // Into place: an older update's stamp goes first, and this one's comes last.
+    [NSFileManager.defaultManager removeItemAtPath:stamp error:nil];
+    if (rename(signing.fileSystemRepresentation, dest.fileSystemRepresentation)) {
+        [NSFileManager.defaultManager removeItemAtPath:signing error:nil];
+        *why = [NSString stringWithFormat:@"its image couldn't be put in place (errno %d)", errno];
+        return nil;
+    }
+    if (![stamp_text(product, region, row) writeToFile:stamp atomically:YES encoding:NSUTF8StringEncoding error:nil]) {
+        [NSFileManager.defaultManager removeItemAtPath:dest error:nil];
+        *why = @"its stamp couldn't be written";
+        return nil;
+    }
+    NSString *existing = [NSString stringWithContentsOfFile:[home stringByAppendingPathComponent:@"Documents/.build.info"]
+                                                   encoding:NSUTF8StringEncoding error:nil];
+    *buildInfo = sp_build_info_with(existing, product, region, row, cdnsRow);
+    return dest;
+}
+
+// ---- the check
+
+// Returns the image to load, once the launch may go on: right away unless a newer build is out, then after
+// Play Anyway or Update. `bundled` is the app's image and `bundledStamp` its build (nil without one: nothing
+// to compare); `library` is the image an update on the device made (Library/spgames/wow-<flavor>) and
+// `libraryStamp` its build, nil when there's none.
+//
+// Which image: the updated one when its build is the patch service's current one, or when the service
+// couldn't be asked and it's a later version than the bundled one; otherwise the bundled one. A newer build
+// out than the one that would load shows the screen. When the new build binds and the device has a signing
+// identity (sp_identity_usable), the screen offers Update: the new image is made and signed here (update)
+// and is the one returned, with *buildInfo the .build.info text the launcher writes once it has loaded.
+// Without an identity, 6.1's screen: the companion brings the new version.
+//
+// One line of log for the outcome, one for the message shown, and one for the image chosen (update: image:),
+// versions only. Sets *pump to UIKit's when it shows its screen.
+NSString *sp_patch_check(NSString *flavor, NSString *bundled, NSDictionary<NSString *, NSString *> *bundledStamp, NSString *library,
+                         NSDictionary<NSString *, NSString *> *libraryStamp, void (^*pump)(double), NSString **buildInfo) {
+    *buildInfo = nil;
+    NSDictionary<NSString *, NSString *> *stamp = bundledStamp;
+    NSString *product = stamp[@"Product"], *region = stamp[@"Branch"].lowercaseString;
+    NSString * (^use)(NSString *, NSString *) = ^NSString *(NSString *image, NSString *why) {
+        BOOL updated = image == library;
+        say_update([NSString stringWithFormat:@"image: %@ %@ %@ (%@)", updated ? @"Library/spgames" : @"bundled", product,
+                                       (updated ? libraryStamp : stamp)[@"Version"], why]);
+        return image;
+    };
+    // With the service out of reach: the later of the two.
+    NSString * (^offline)(void) = ^NSString *(void) {
+        return libraryStamp && sp_version_newer(libraryStamp[@"Version"], stamp[@"Version"])
+            ? use(library, @"couldn't check, and it's the later build") : use(bundled, @"couldn't check");
+    };
+    if (!stamp) {
+        say(@"couldn't check: the image has no stamp");
+        return bundled;
+    }
+    // The region goes into a host name.
+    NSCharacterSet *notRegion = [NSCharacterSet characterSetWithCharactersInString:@"abcdefghijklmnopqrstuvwxyz"].invertedSet;
+    if (!product.length || !region.length || [region rangeOfCharacterFromSet:notRegion].location != NSNotFound) {
+        say(@"couldn't check: the stamp has no product or region");
+        return offline();
+    }
+    double t = now();
+    NSString *problem = nil;
+    NSString *text = fetch(product, region, @"versions", NO, *pump, &problem);
+    NSDictionary<NSString *, NSString *> *row = text ? sp_table_row(text, @"Region", region) : nil;
+    if (text && !row[@"BuildConfig"].length) problem = [NSString stringWithFormat:@"no %@ row", region];
+    if (problem) {
+        say([NSString stringWithFormat:@"couldn't check %@ (%@, %.1f s): going on", product, problem, now() - t]);
+        return offline();
+    }
+    NSString *withheld = nil;
+    BOOL drilled = drill(&withheld);
+    if (drilled) {
+        say([NSString stringWithFormat:@"drill: SP_PATCH_DRILL=%@: %@ %@ counts as newer than the image", withheld ?: @"binds",
+                                       product, row[@"VersionsName"]]);
+    } else if (libraryStamp && [row[@"BuildConfig"] isEqual:libraryStamp[@"Build Key"]]) {
+        say([NSString stringWithFormat:@"up to date: %@ %@, updated on this device (%@, %.1f s)", product, libraryStamp[@"Version"],
+                                       region, now() - t]);
+        return use(library, @"the current build");
+    }
+    if (!drilled && [row[@"BuildConfig"] isEqual:stamp[@"Build Key"]]) {
+        say([NSString stringWithFormat:@"up to date: %@ %@ (%@, %.1f s)", product, stamp[@"Version"], region, now() - t]);
+        return use(bundled, @"the current build");
+    }
+    NSString *version = row[@"VersionsName"].length ? row[@"VersionsName"] : @"(no version)";
+    say([NSString stringWithFormat:@"newer build out: %@ %@, the image is %@ (%@, %.1f s)", product, version,
+                                   stamp[@"Version"], region, now() - t]);
+    NSString *game = sp_flavor_name(flavor), *noun = sp_device_noun();
+    NSString *news = sp_patch_news(game, row[@"VersionsName"]), *heading = [news stringByAppendingString:@"."];
+    SPPatchController *screen = present(pump);
+    if (!screen) return use(bundled, @"a newer build is out");
+    // Under every state's words: the build this device has, against the news in the heading.
+    NSString *has = [NSString stringWithFormat:@"This %@ has %@ %@.", noun, game, stamp[@"Version"]];
+    NSString *why = nil;
+    verdict v = check_new_build(flavor, bundled, product, region, row, screen, heading, has, *pump, &why);
+    BOOL here = v == binds && sp_identity_usable();
+    if (v == needs_update) {
+        say([NSString stringWithFormat:@"message: needs a SlashPlayed update: %@ %@ doesn't bind, the image is %@", product,
+                                       version, stamp[@"Version"]]);
+        [screen setHeading:@"This patch needs a SlashPlayed update."
+                      body:sp_patch_needs_update_body(news)
+                      note:has
+                   buttons:@[@"Play Anyway"]];
+    } else if (here) {
+        say([NSString stringWithFormat:@"message: update here: %@ %@ binds, the image is %@, and this device can sign", product,
+                                       version, stamp[@"Version"]]);
+        [screen setHeading:heading
+                      body:[NSString stringWithFormat:@"This %@ can update itself in a few seconds, signed with the key "
+                                                      @"your Mac sent it. Or press Play in SlashPlayed Companion on your Mac.", noun]
+                      note:has
+                   buttons:@[@"Update", @"Play Anyway"]];
+    } else {
+        say([NSString stringWithFormat:@"message: update on your Mac: %@ %@ %@, the image is %@", product, version,
+                                       v == binds ? @"binds" : [NSString stringWithFormat:@"(couldn't tell whether it binds: %@)", why],
+                                       stamp[@"Version"]]);
+        [screen setHeading:heading
+                      body:[NSString stringWithFormat:@"Update on your Mac to play it: press Play in SlashPlayed Companion, "
+                                                      @"and it brings this %@ the new version.", noun]
+                      note:has
+                   buttons:@[@"Play Anyway"]];
+    }
+    if (here && wait_for_choice(screen, *pump) == 0) {
+        // The companion follows this line as it does Play Anyway's (ClientLauncher.Marker.update).
+        say(@"Update");
+        [screen setHeading:[NSString stringWithFormat:@"Updating %@ to %@…", game, version]
+                      body:[NSString stringWithFormat:@"Making the new version and signing it on this %@.", noun]
+                      note:nil
+                   buttons:@[]];
+        t = now();
+        NSString *image = update(flavor, product, region, row, *pump, buildInfo, &why);
+        if (image) {
+            say_update([NSString stringWithFormat:@"%@ %@ is Library/spgames/%@, %.1f s in all", product, version,
+                                           image.lastPathComponent, now() - t]);
+            dismiss(screen, *pump);
+            say_update([NSString stringWithFormat:@"image: Library/spgames %@ %@ (just updated)", product, version]);
+            return image;
+        }
+        say_update([NSString stringWithFormat:@"failed after %.1f s: %@", now() - t, why]);
+        [screen setHeading:[NSString stringWithFormat:@"%@ couldn't be updated on this %@.", game, noun]
+                      body:@"Update on your Mac instead: press Play in SlashPlayed Companion."
+                      // The reason, for a report, under the plain words, then the build it has.
+                      note:[NSString stringWithFormat:@"%@%@.\n%@", [why substringToIndex:1].uppercaseString,
+                                                      [why substringFromIndex:1], has]
+                   buttons:@[@"Play Anyway"]];
+    }
+    wait_for_choice(screen, *pump);
+    say(@"Play Anyway");
+    dismiss(screen, *pump);
+    return use(bundled, @"Play Anyway");
+}
+
+// When dlopen refuses an updated image (the launcher has deleted it): a few seconds' note on the screen, and
+// the launch goes on with the bundled image. No buttons: the helper is already attached.
+void sp_patch_refused(NSString *flavor, NSString *version, NSString *bundledVersion, void (^*pump)(double)) {
+    SPPatchController *screen = present(pump);
+    if (!screen) return;
+    NSString *game = sp_flavor_name(flavor);
+    [screen setHeading:[NSString stringWithFormat:@"%@ %@ couldn't be loaded.", game, version]
+                  body:[NSString stringWithFormat:@"This %@ plays %@ %@ instead. The update made on it is deleted, and the "
+                                                  @"next start offers it again.", sp_device_noun(), game, bundledVersion]
+                  note:nil
+               buttons:@[]];
+    for (double end = now() + 4; now() < end;) (*pump)(0.05);
+    dismiss(screen, *pump);
+}

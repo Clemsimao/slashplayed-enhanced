@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light dark">
+  <title>SlashPlayed — the Mac World of Warcraft clients on iPad, iPhone, and Vision Pro</title>
+  <link rel="icon" type="image/png" href="icon-1024.png">
+  <link rel="apple-touch-icon" href="icon-1024.png">
+  <meta name="description" content="SlashPlayed is a free, open-source compatibility layer that runs the Mac World of Warcraft clients on M2-or-later iPads, iPhone 15 Pro and later, and Apple Vision Pro.">
+  <style>
+    :root {
+      --bg: #f5f6f8;
+      --fg: #1c1e24;
+      --muted: #5b6070;
+      --card: #ffffff;
+      --border: #dfe2e8;
+      --accent: #2f6fe4;
+      --accent-fg: #ffffff;
+      --note-bg: #fff7e0;
+      --note-border: #e8cf7a;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg: #14171f;
+        --fg: #eceef3;
+        --muted: #9aa1b2;
+        --card: #1d212c;
+        --border: #2c3240;
+        --accent: #4d8bff;
+        --accent-fg: #ffffff;
+        --note-bg: #2a2516;
+        --note-border: #5e5128;
+      }
+    }
+    * { box-sizing: border-box; }
+    html { -webkit-text-size-adjust: 100%; }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--fg);
+      font: 17px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    }
+    a { color: var(--accent); }
+    main {
+      max-width: 44rem;
+      margin: 0 auto;
+      padding: 4rem 1.5rem 3rem;
+    }
+    header { text-align: center; }
+    .icon {
+      width: 9rem;
+      height: 9rem;
+      /* The source PNG is full-bleed; round it like a macOS app icon. */
+      border-radius: 22.5%;
+      box-shadow: 0 0.5rem 1.5rem rgb(0 0 0 / 0.25);
+    }
+    h1 {
+      margin: 1.5rem 0 0.5rem;
+      font-size: 2.75rem;
+      letter-spacing: -0.02em;
+    }
+    h2 {
+      margin: 2.5rem 0 0.75rem;
+      font-size: 1.35rem;
+    }
+    .tagline {
+      margin: 0 auto 2rem;
+      max-width: 34rem;
+      font-size: 1.2rem;
+      color: var(--muted);
+    }
+    .download {
+      display: inline-block;
+      padding: 0.8rem 1.8rem;
+      border-radius: 0.6rem;
+      background: var(--accent);
+      color: var(--accent-fg);
+      font-weight: 600;
+      font-size: 1.1rem;
+      text-decoration: none;
+    }
+    .download:hover, .download:focus-visible { filter: brightness(1.1); }
+    .sub {
+      margin: 0.75rem 0 0;
+      font-size: 0.95rem;
+      color: var(--muted);
+    }
+    .disclaimer {
+      margin: 2.5rem 0 0;
+      padding: 1rem 1.25rem;
+      border: 1px solid var(--note-border);
+      border-radius: 0.75rem;
+      background: var(--note-bg);
+      font-size: 0.95rem;
+    }
+    .disclaimer p { margin: 0; }
+    .disclaimer p + p { margin-top: 0.6rem; }
+    .screenshot {
+      /* The companion's main window at 2x; shown at its 1x size, or narrower on a phone. */
+      display: block;
+      width: 30rem;
+      max-width: 100%;
+      height: auto;
+      margin: 2.5rem auto 0;
+      border: 1px solid var(--border);
+      border-radius: 0.75rem;
+      box-shadow: 0 0.5rem 1.5rem rgb(0 0 0 / 0.15);
+    }
+    ul { padding-left: 1.25rem; }
+    li + li { margin-top: 0.35rem; }
+    table {
+      border-collapse: collapse;
+      margin: 0.5rem 0;
+      font-size: 0.95rem;
+    }
+    th, td {
+      padding: 0.3rem 1rem 0.3rem 0;
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+    }
+    footer {
+      padding: 0 1.5rem 3rem;
+      text-align: center;
+      font-size: 0.95rem;
+      color: var(--muted);
+    }
+    footer a { color: var(--muted); }
+    footer a:hover { color: var(--fg); }
+    footer nav { margin-bottom: 0.5rem; }
+    footer nav a { margin: 0 0.6rem; display: inline-block; }
+    @media (max-width: 30rem) {
+      main { padding-top: 2.5rem; }
+      .icon { width: 7rem; height: 7rem; }
+      h1 { font-size: 2.2rem; }
+      .tagline { font-size: 1.05rem; }
+      .download { display: block; text-align: center; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <header>
+      <img class="icon" src="icon-1024.png" alt="SlashPlayed app icon" width="1024" height="1024">
+      <h1>SlashPlayed</h1>
+      <p class="tagline">Play the Mac World of Warcraft clients (Classic Era, TBC Anniversary, MoP Classic, and Retail) on M2-or-later iPads, iPhone 15 Pro and later, and Apple Vision Pro.</p>
+      <a class="download" href="https://github.com/paulstraw/slashplayed/releases/latest">Download SlashPlayed Companion</a>
+      <p class="sub">Free and open source (MIT). Early and experimental.</p>
+    </header>
+
+    <div class="disclaimer">
+      <p><strong>Unofficial.</strong> SlashPlayed is not affiliated with, endorsed by, or supported by Blizzard Entertainment. It includes <strong>no Blizzard files</strong>: the game comes from Blizzard's own servers, and you need your own Battle.net account and subscription. <strong>Use it at your own risk: your account could be actioned.</strong></p>
+      <p><strong>Early and experimental.</strong> Expect rough edges, and expect a game patch to break it now and then until SlashPlayed catches up.</p>
+    </div>
+
+    <img class="screenshot" src="screenshot.png" alt="The SlashPlayed Companion window running Classic Era on an iPhone: the client built, installed, and started, its code pages prepared, and the game running on the device, its data streamed from Blizzard" width="960" height="950">
+
+    <h2>What it is</h2>
+    <p>SlashPlayed is a compatibility layer that runs the unmodified Mac game clients on iPadOS, iOS, and visionOS. <strong>SlashPlayed Companion</strong>, a Mac app, builds the <strong>SlashPlayed</strong> app from the Mac game client it downloads from Blizzard, signs it with your own Apple developer account, and installs it on your iPad, iPhone, or Vision Pro. You sign in to Battle.net on the device, and the game fetches its data from Blizzard as you play. After that, the Mac isn't needed to play.</p>
+    <p>The games: Classic Era (with Hardcore and Season of Discovery, by switching game mode in game), TBC Anniversary, MoP Classic, and Retail. MoP Classic has been played on the Vision Pro and an iPhone 16 Pro, and is untested on the iPad.</p>
+
+    <h2>Requirements</h2>
+    <ul>
+      <li>An Apple Silicon Mac with macOS 15 or later and Xcode.</li>
+      <li>An Apple ID signed in to Xcode. A free one works (the app is signed again every 7 days); a paid Apple Developer Program membership signs for a year.</li>
+      <li>An iPad with an M2 chip or later on iPadOS 26, an iPhone 15 Pro or later on iOS 26, or an Apple Vision Pro on visionOS 27, paired with the Mac in Xcode, with Developer Mode on. Of the iPhones, only the 16 Pro has been tested.</li>
+      <li>A hardware keyboard for typing in the game (it shows no on-screen keyboard), and on an iPhone, AssistiveTouch on to use a mouse.</li>
+      <li>A Battle.net account with an active World of Warcraft subscription. You sign in on the device. The game doesn't need to be installed on the Mac.</li>
+      <li><a href="https://apps.apple.com/app/id6755608044">LocalDevVPN</a> (free, from the App Store) on the device, turned on when the game starts. The Mac isn't needed then.</li>
+      <li>Room on the device for the games you put there (a game that fetches its own data grows toward these sizes as you play):
+        <table>
+          <tr><th>Games</th><th>Space</th></tr>
+          <tr><td>Classic Era</td><td>~25 GB</td></tr>
+          <tr><td>Classic Era + Anniversary</td><td>~37 GB</td></tr>
+          <tr><td>MoP Classic</td><td>~150 GB (about 23 GB of its own; a copy from the Mac takes the whole store the games share)</td></tr>
+          <tr><td>Retail</td><td>~150 GB</td></tr>
+        </table>
+        Retail on the iPad or iPhone needs a 512 GB or larger iPad or iPhone, and 8 GB of memory. It has been played on an M2 iPad, where it runs hot and gets a memory warning, and on an iPhone 16 Pro.
+      </li>
+    </ul>
+
+    <h2>Learn more</h2>
+    <ul>
+      <li><a href="https://github.com/paulstraw/slashplayed#readme">Read me</a>: install, first run, playing and known issues.</li>
+      <li><a href="https://github.com/paulstraw/slashplayed/blob/main/docs/troubleshooting.md">Troubleshooting</a></li>
+      <li><a href="https://github.com/paulstraw/slashplayed/blob/main/docs/architecture.md">How it works</a></li>
+      <li><a href="https://github.com/paulstraw/slashplayed/issues/new/choose">Report an issue</a></li>
+    </ul>
+  </main>
+  <footer>
+    <nav>
+      <a href="https://github.com/paulstraw/slashplayed">GitHub</a>
+      <a href="https://github.com/paulstraw/slashplayed/tree/main/docs">Docs</a>
+      <a href="https://github.com/paulstraw/slashplayed/issues">Issues</a>
+    </nav>
+    <p>© 2026 Straw Dynamics. MIT License. Not affiliated with Blizzard Entertainment.</p>
+  </footer>
+</body>
+</html>

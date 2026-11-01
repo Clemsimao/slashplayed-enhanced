@@ -1,0 +1,45 @@
+#!/bin/bash
+# Checks a commit message against the format in CLAUDE.md (Commits): a Conventional Commits subject of
+# at most 72 characters, a blank line, then a body wrapped at 72. Git runs it on every commit once the
+# checkout points at this folder:
+#   git config core.hooksPath scripts/hooks
+# The long messages it exists to stop were one paragraph used as the subject, so the subject rules are
+# strict; a body line may run long only when it holds a URL or a path that can't be broken.
+set -euo pipefail
+
+msg_file=$1
+TYPES='feat|fix|docs|test|refactor|perf|build|ci|chore|revert'
+
+# What git will record: comments and everything below the scissors line are stripped.
+msg=$(sed -e '/^# ------------------------ >8 ------------------------$/,$d' -e '/^#/d' "$msg_file")
+subject=$(head -n 1 <<<"$msg")
+failed=0
+fail() { echo "commit-msg: $1" >&2; failed=1; }
+
+# Merges and fixup!/squash! commits made by git itself keep git's own subjects.
+if [[ "$subject" =~ ^(Merge |Revert \"|fixup! |squash! |amend! ) ]]; then
+  exit 0
+fi
+
+if ! [[ "$subject" =~ ^($TYPES)(\([a-z0-9/._-]+\))?!?:\ [^\ ] ]]; then
+  fail "subject must be 'type(scope): summary', type one of ${TYPES//|/, }: $subject"
+fi
+if (( ${#subject} > 72 )); then
+  fail "subject is ${#subject} characters; keep it to 72 (the detail goes in the body)"
+fi
+if [[ "$subject" == *. ]]; then
+  fail "subject ends with a period"
+fi
+if [[ $(wc -l <<<"$msg") -gt 1 && -n $(sed -n 2p <<<"$msg") ]]; then
+  fail "the second line must be blank, between the subject and the body"
+fi
+while IFS= read -r line; do
+  if (( ${#line} > 72 )) && ! [[ "$line" =~ (https?://|/[^\ ]{20,}) ]]; then
+    fail "body line is ${#line} characters; wrap at 72: ${line:0:60}..."
+  fi
+done < <(tail -n +3 <<<"$msg")
+
+if (( failed )); then
+  echo "commit-msg: message kept in $msg_file; fix it with git commit -e -F $msg_file" >&2
+  exit 1
+fi

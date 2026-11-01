@@ -1,0 +1,125 @@
+# Unsigned builds, unit tests and the tree checks for pull requests and main.
+#
+# Everything here runs without an Apple account or a game install: the shims and the launcher build
+# unsigned (the companion signs them with the user's identity at run time), the companion is sealed ad
+# hoc by its own build.sh, and the tests build their fixtures from research/loadertest. The tests that
+# read a real install are opt-in and stay off here. The release workflow is the only place that signs.
+#
+# Untrusted PR code runs here, so this workflow gets a read-only token and no secrets. Never switch it
+# to pull_request_target.
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  # The xcode-27 image (arm64, GA since 2026-10-15) carries Xcode 27.0, 27.1 (the default) and 27.2.
+  # 27.1 has the visionOS 27 and iOS 27.1 SDKs the shims build against and matches the maintainer's
+  # toolchain; pinned rather than the default so an image update can't change it under a PR.
+  XCODE_APP: /Applications/Xcode_27.1.app
+  # Matches the local toolchain (xcodegen --version). The checksum is the digest GitHub publishes for the
+  # release's xcodegen.zip asset.
+  XCODEGEN_VERSION: 2.46.0
+  XCODEGEN_SHA256: 4d9e34b62172d645eed6457cac13fc222569974098ef4ee9c3368bedf0196806
+  # rustup-init for scripts/build-idevice.sh (the companion links idevice). The checksum is the one
+  # static.rust-lang.org publishes next to the binary (rustup-init.sha256).
+  RUSTUP_VERSION: 1.29.2
+  RUSTUP_SHA256: f7c7e11eb2e07f006e532a8aaac77b32f4527d305ac386c0c633ca6133d35ca9
+
+jobs:
+  # Greps only, so a scrub or hardcoding slip fails in seconds rather than after the builds.
+  check-tree:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Scrub and no-hardcoding checks
+        run: scripts/check-tree.sh
+
+  build-and-test:
+    runs-on: xcode-27
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Select Xcode
+        run: |
+          sudo xcode-select -s "$XCODE_APP"
+          xcodebuild -version
+          xcodebuild -showsdks | grep -E 'xros|iphoneos'
+
+      - name: Install XcodeGen
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/xcodegen.zip" \
+            "https://github.com/yonaskolb/XcodeGen/releases/download/$XCODEGEN_VERSION/xcodegen.zip"
+          echo "$XCODEGEN_SHA256  $RUNNER_TEMP/xcodegen.zip" | shasum -a 256 -c -
+          unzip -q "$RUNNER_TEMP/xcodegen.zip" -d "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/xcodegen/bin" >> "$GITHUB_PATH"
+
+      # rustup, pinned and checked like XcodeGen: scripts/build-idevice.sh installs the Rust toolchain it
+      # pins (1.99.0) and the targets through it.
+      - name: Install rustup
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/rustup-init" \
+            "https://static.rust-lang.org/rustup/archive/$RUSTUP_VERSION/aarch64-apple-darwin/rustup-init"
+          echo "$RUSTUP_SHA256  $RUNNER_TEMP/rustup-init" | shasum -a 256 -c -
+          chmod +x "$RUNNER_TEMP/rustup-init"
+          "$RUNNER_TEMP/rustup-init" -y --profile minimal --default-toolchain none --no-modify-path
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+
+      # The companion links idevice (Sources/Pairing.swift), and the device app's JIT helper, which the
+      # companion bundles (apps/client/build-helper.sh), links it for each device platform: built from
+      # source at the pinned commit, a step per platform so a failure names it.
+      - name: Build idevice (macOS)
+        run: scripts/build-idevice.sh macos
+
+      - name: Build idevice (visionOS)
+        run: scripts/build-idevice.sh xros
+
+      - name: Build idevice (iPadOS and iOS)
+        run: scripts/build-idevice.sh ios
+
+      # The device app's start screen face, Goodmountain, and its license (apps/client/spstart.m): its
+      # license forbids changing or re-hosting the file, so it's never committed, and scripts/fetch-font.sh
+      # downloads both at a pinned commit and checks their SHA-256. The companion bundles them.
+      - name: Fetch the start screen's font
+        run: scripts/fetch-font.sh
+
+      # The launcher's on-device signer (apps/client/spsign.m) links zsign and OpenSSL, and the companion's
+      # tests run it on the Mac: built from source by scripts/build-zsign.sh, each at a pinned commit that
+      # the script checks after cloning (a moved tag fails the build), a step per platform.
+      - name: Build zsign (macOS)
+        run: scripts/build-zsign.sh macos
+
+      - name: Build zsign (visionOS)
+        run: scripts/build-zsign.sh xros
+
+      - name: Build zsign (iPadOS and iOS)
+        run: scripts/build-zsign.sh ios
+
+      # Separate steps so a failure names its platform. The companion build below rebuilds them into the
+      # app (bundle-resources.sh); this is the same build, from the committed shims/generated/.
+      - name: Build shims (visionOS)
+        run: shims/build.sh xros
+
+      - name: Build shims (iPadOS and iOS)
+        run: shims/build.sh ios
+
+      - name: Build the companion (unsigned)
+        run: apps/companion/build.sh
+
+      - name: Test the companion
+        run: apps/companion/test.sh

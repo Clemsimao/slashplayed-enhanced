@@ -1,0 +1,11 @@
+work/
+__pycache__/
+shims/system/Logs/
+/Logs/
+shims/system/WTF/
+.env
+apps/companion/SPCompanion.xcodeproj/
+apps/companion/Generated/
+.DS_Store
+config/local.env
+build/

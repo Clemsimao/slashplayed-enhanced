@@ -1,0 +1,42 @@
+// zsign's side of the launcher's signer (spsign.m; research/dlopentest uses it too). zsign (work/zsign,
+// scripts/build-zsign.sh) signs one Mach-O in place with a development identity from a .p12, the way the
+// companion's codesign does on the Mac. Everything comes from memory (scripts/zsign.patch's
+// ZSignAsset::InitData): the .p12, its password, and the provisioning profile are never written to a file,
+// and nothing here logs them.
+#include <string>
+#include <unistd.h>
+
+#include "common.h"
+#include "macho.h"
+#include "openssl.h"
+
+// Signs `path` in place as `identifier` (the caller signs a fresh copy and renames it over the old file: the
+// kernel keeps a registered signature with the file it was registered for). zsign's own messages (warnings and errors only: what failed, never a
+// value) go to `logfd` while it runs, since stdout goes nowhere on the device. 0 on success.
+extern "C" int sp_zsign(const char *path, const char *identifier, const void *p12, size_t p12_len, const char *password,
+                        const void *profile, size_t profile_len, int logfd) {
+    fflush(stdout);
+    int saved = dup(1);
+    if (logfd >= 0) dup2(logfd, 1);
+    ZLog::SetLogLever(ZLog::E_WARN);
+
+    int rc = 1;
+    ZMachO macho;
+    ZSignAsset asset;
+    std::string p12_data((const char *)p12, p12_len), profile_data((const char *)profile, profile_len);
+    if (!macho.Init(path)) {
+        ZLog::Error(">>> not a Mach-O zsign can read\n");
+    } else if (!asset.InitData("", p12_data, profile_data, "", password, false, false, true)) {
+        // InitData has said why (the .p12 or its password, the profile's team, or no certificate for the key).
+    } else if (macho.Sign(&asset, true, identifier, "", "", "")) {
+        rc = 0; // Sign unmapped the file, which wrote it.
+    }
+    if (rc) macho.Free();
+    // The copies held here are cleared before they're freed; zsign's own (inside OpenSSL) go with `asset`.
+    std::fill(p12_data.begin(), p12_data.end(), 0);
+
+    fflush(stdout);
+    dup2(saved, 1);
+    close(saved);
+    return rc;
+}

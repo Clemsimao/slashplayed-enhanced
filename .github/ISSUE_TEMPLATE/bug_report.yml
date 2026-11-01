@@ -1,0 +1,128 @@
+name: Bug report
+description: Something in SlashPlayed or its companion doesn't work the way it should.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting this. Issues are public.
+
+        **Never paste your Battle.net email or password, a `login.txt`, Battle.net preference contents (`net.battle`), your launch credentials, a signing identity (`.p12`) or a pairing record** here, in a log or a screenshot. Export Diagnostics already leaves them out.
+
+        Check [troubleshooting](https://github.com/paulstraw/slashplayed/blob/main/docs/troubleshooting.md) first. For a security problem, use the private report linked from the new-issue page instead. If the companion said your game version isn't supported yet, or the device said "This patch needs a SlashPlayed update", use the "New game patch broke it" form.
+  - type: input
+    id: companion-version
+    attributes:
+      label: Companion version
+      description: SlashPlayed Companion › About SlashPlayed Companion.
+      placeholder: 1.0.1 (1)
+    validations:
+      required: true
+  - type: dropdown
+    id: flavor
+    attributes:
+      label: Flavor
+      options:
+        - Classic Era
+        - TBC Anniversary
+        - MoP Classic
+        - Retail
+        - Not about a specific flavor
+    validations:
+      required: true
+  - type: input
+    id: game-build
+    attributes:
+      label: Game build
+      description: At the bottom of the game's login screen, or on the device's "is out" screen before the game starts ("This iPad has Classic Era …"). If Battle.net is on your Mac, also in its game settings.
+      placeholder: 1.15.8.65300
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      options:
+        - Apple Vision Pro (visionOS)
+        - iPad (iPadOS)
+        - iPhone (iOS)
+    validations:
+      required: true
+  - type: input
+    id: device-model
+    attributes:
+      label: Device model
+      placeholder: Apple Vision Pro (M2), iPad Pro 11-inch (M4), iPhone 16 Pro…
+    validations:
+      required: true
+  - type: input
+    id: os-versions
+    attributes:
+      label: macOS and visionOS, iPadOS, or iOS versions
+      description: Apple menu › About This Mac on the Mac; Settings › General › About on the device.
+      placeholder: macOS 26.1, visionOS 27.0
+    validations:
+      required: true
+  - type: input
+    id: xcode-version
+    attributes:
+      label: Xcode version
+      description: Xcode › About Xcode, or `xcodebuild -version` in Terminal.
+      placeholder: Xcode 27.0 (27A123)
+    validations:
+      required: true
+  - type: dropdown
+    id: sign-in
+    attributes:
+      label: Sign-in
+      description: How the game signed in to Battle.net.
+      options:
+        - On the device (the default)
+        - Play with My Mac's Battle.net
+        - Didn't get as far as signing in
+    validations:
+      required: true
+  - type: dropdown
+    id: copying
+    attributes:
+      label: Copy Game Files from This Mac
+      description: Settings › Copy Game Files from This Mac, for this device. Off means the game fetches its data on the device as it plays.
+      options:
+        - "Off"
+        - "On"
+        - Don't know
+    validations:
+      required: true
+  - type: dropdown
+    id: update-on-device
+    attributes:
+      label: Update Games on This Device
+      description: Settings > Updates on Devices, for this device.
+      options:
+        - "Off"
+        - "On"
+        - Don't know
+    validations:
+      required: true
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, and what happened instead. Include the companion's error message and the step it failed at. Screenshots help.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Pick Classic Era in the menu by Play and click Play
+        2. Turn on LocalDevVPN on the iPhone
+        3. …
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Export Diagnostics zip
+      description: |
+        Reproduce the problem, then use **Help › Export Diagnostics…** (also a button on any failure) and drag the zip from `~/Library/Logs/SlashPlayed/diagnostics/` here.
+        It holds the companion's logs, the device's `spconsole.log` and crash reports, and versions, with credentials left out. Look through it first if you like. If it couldn't reach the device, say so, and describe what the device showed.
+    validations:
+      required: true

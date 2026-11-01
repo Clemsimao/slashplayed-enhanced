@@ -1,0 +1,98 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+The WoW flavors, the one place that lists what each one is: its name, its product (the Product column of
+the install's .build.info, and the patch service's product), its client (the Mac client's executable in
+the flavor's folder, which is also its name in the build's install manifest on Blizzard's CDN), the arguments Battle.net launches it with
+less the launch credentials it adds (-launcherlogin is the one that matters: without it the client doesn't
+sign in from the device's login.txt, docs/research.md), and the SPHover addon's ## Interface number
+(addon/SPHover/SPHover.toc lists every flavor's, in this order, as FlavorTests checks).
+In this order on the device's start screen. Read by scripts/flavor.sh (plutil), the companion's Flavor.swift
+(a resource of the app and its tests), and the launcher (launcher.m, spstart.m: the device app carries it,
+copied by apps/client/build.sh and ClientAssembly.swift alike). A new flavor also needs a case in
+Flavor.swift and flavor.sh's install paths.
+The id is also the flavor's folder, _<id>_, as Battle.net names it: so classic is MoP
+Classic (_classic_), not Classic Era (_classic_era_). The toc follows the build's version, major * 10000
++ minor * 100 + patch (5.5.4 is 50504, 12.1.5 is 120105): Blizzard's own addon TOCs don't state it, and
+it changes with a patch's version. A client flags an addon with an older number as out of date, so a
+patch that changes the version needs it here and in the TOC. Classic Era's Hardcore and Season of Discovery need no entry: Battle.net starts them with
+another -initialgamemode, but the game switches between them in the one running client.
+-->
+<plist version="1.0">
+<array>
+	<dict>
+		<key>id</key>
+		<string>classic_era</string>
+		<key>product</key>
+		<string>wow_classic_era</string>
+		<key>client</key>
+		<string>World of Warcraft Classic.app/Contents/MacOS/World of Warcraft Classic</string>
+		<key>name</key>
+		<string>Classic Era</string>
+		<key>arguments</key>
+		<array>
+			<string>-launcherlogin</string>
+			<string>-uid</string>
+			<string>wow_classic_era</string>
+			<string>-initialgamemode=cera</string>
+		</array>
+		<key>toc</key>
+		<integer>11509</integer>
+	</dict>
+	<dict>
+		<key>id</key>
+		<string>anniversary</string>
+		<key>product</key>
+		<string>wow_anniversary</string>
+		<key>client</key>
+		<string>World of Warcraft Classic.app/Contents/MacOS/World of Warcraft Classic</string>
+		<key>name</key>
+		<string>TBC Anniversary</string>
+		<key>arguments</key>
+		<array>
+			<string>-launcherlogin</string>
+			<string>-uid</string>
+			<string>wow_classic_anniversary</string>
+			<string>-initialgamemode=bccfresh</string>
+		</array>
+		<key>toc</key>
+		<integer>20506</integer>
+	</dict>
+	<dict>
+		<key>id</key>
+		<string>classic</string>
+		<key>product</key>
+		<string>wow_classic</string>
+		<key>client</key>
+		<string>World of Warcraft Classic.app/Contents/MacOS/World of Warcraft Classic</string>
+		<key>name</key>
+		<string>MoP Classic</string>
+		<key>arguments</key>
+		<array>
+			<string>-launcherlogin</string>
+			<string>-uid</string>
+			<string>wow_classic</string>
+		</array>
+		<key>toc</key>
+		<integer>50504</integer>
+	</dict>
+	<dict>
+		<key>id</key>
+		<string>retail</string>
+		<key>product</key>
+		<string>wow</string>
+		<key>client</key>
+		<string>World of Warcraft.app/Contents/MacOS/World of Warcraft</string>
+		<key>name</key>
+		<string>Retail</string>
+		<key>arguments</key>
+		<array>
+			<string>-launcherlogin</string>
+			<string>-uid</string>
+			<string>wow</string>
+		</array>
+		<key>toc</key>
+		<integer>120105</integer>
+	</dict>
+</array>
+</plist>

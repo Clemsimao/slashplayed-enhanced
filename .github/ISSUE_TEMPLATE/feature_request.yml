@@ -1,0 +1,34 @@
+name: Feature request
+description: Suggest something SlashPlayed or its companion should do.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: The problem or situation, rather than a particular solution. "My hand gets tired holding the mouselook pinch" is more useful than "add a toggle".
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would help?
+      description: How you'd like SlashPlayed to handle it.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives and workarounds
+      description: Anything you've tried, or how you get by now.
+  - type: dropdown
+    id: platform
+    attributes:
+      label: Platform
+      description: If this is about one platform.
+      options:
+        - All of them
+        - Apple Vision Pro (visionOS)
+        - iPad (iPadOS)
+        - iPhone (iOS)
+        - The Mac companion

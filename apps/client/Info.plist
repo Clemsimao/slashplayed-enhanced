@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key><string>@BUNDLE_ID@</string>
+	<key>CFBundleExecutable</key><string>slashplayed</string>
+	<key>CFBundleName</key><string>SlashPlayed</string>
+	<key>CFBundlePackageType</key><string>APPL</string>
+	<key>CFBundleVersion</key><string>1</string>
+	<key>CFBundleShortVersionString</key><string>@VERSION@</string>
+	<key>CFBundleSupportedPlatforms</key><array><string>@PLATFORM@</string></array>
+	<key>DTPlatformName</key><string>@DTPLATFORM@</string>
+	<key>MinimumOSVersion</key><string>@MINOS@</string>
+	<key>UIDeviceFamily</key><array>@FAMILY@</array>
+	<key>UIFileSharingEnabled</key><true/>
+	<!-- With UIFileSharingEnabled, Documents/ shows in the Files app too (On My iPhone > SlashPlayed): game
+	     settings and addons can be edited there. The start screen's Settings opens each game's folder in it. -->
+	<key>LSSupportsOpeningDocumentsInPlace</key><true/>
+	@PLATFORM_KEYS@
+	<!-- Without it TCC aborts the app (__abort_with_payload) when the client opens audio input (voice chat). -->
+	<key>NSMicrophoneUsageDescription</key><string>Voice chat</string>
+	<!-- The headset's pairing (sppair.m) finds Settings' Remote Devices over Bonjour; the first browse asks for
+	     local network access. Only visionOS browses: an iPad or iPhone gets its pairing from the Mac. -->
+	<key>NSBonjourServices</key><array><string>_remotepairing-manual-pairing._tcp</string></array>
+	<key>NSLocalNetworkUsageDescription</key><string>SlashPlayed finds Remote Devices in Settings to pair with this Vision Pro, so it can prepare the game without a Mac.</string>
+	<!-- LocalDevVPN's localdevvpn://enable?scheme=slashplayed turns it on and opens this, back to the app (spvpn.m). -->
+	<key>CFBundleURLTypes</key><array><dict>
+		<key>CFBundleURLName</key><string>slashplayed</string>
+		<key>CFBundleURLSchemes</key><array><string>slashplayed</string></array>
+	</dict></array>
+	<!-- No UIUserInterfaceStyle: each launcher screen pins Dark itself (spstart.m, spsettings.swift,
+	     spsignin.swift), so nothing app-wide decides it. -->
+	<!-- Trackpad and mouse clicks arrive as indirect pointer touches with button masks. -->
+	<key>UIApplicationSupportsIndirectInputEvents</key><true/>
+	<key>UIApplicationSceneManifest</key><dict>
+		<key>UIApplicationSupportsMultipleScenes</key><false/>
+		<key>UIApplicationPreferredDefaultSceneSessionRole</key><string>UIWindowSceneSessionRoleApplication</string>
+	</dict>
+</dict>
+</plist>

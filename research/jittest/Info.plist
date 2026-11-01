@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key><string>@BUNDLE_ID@</string>
+	<key>CFBundleExecutable</key><string>SPJitTest</string>
+	<key>CFBundleName</key><string>SPJitTest</string>
+	<key>CFBundlePackageType</key><string>APPL</string>
+	<key>CFBundleVersion</key><string>1</string>
+	<key>CFBundleShortVersionString</key><string>1.0</string>
+	<key>CFBundleSupportedPlatforms</key><array><string>@PLATFORM@</string></array>
+	<key>DTPlatformName</key><string>@DTPLATFORM@</string>
+	<key>MinimumOSVersion</key><string>@MINOS@</string>
+	<key>UIDeviceFamily</key><array>@FAMILY@</array>
+	<key>UIFileSharingEnabled</key><true/>
+	<!-- h2-h4 on visionOS: the device's RemotePairing port is found over Bonjour (helper_host.swift). -->
+	<key>NSBonjourServices</key><array><string>_remotepairing._tcp</string><string>_remotepairing-manual-pairing._tcp</string></array>
+	<!-- p2 waits on a person (the pairing code), so it runs as a UIKit app with a window: an app with no
+	     scene is killed by the 20 s launch watchdog. The other experiments never start UIKit. -->
+	<key>UIApplicationSceneManifest</key>
+	<dict>
+		<key>UIApplicationSupportsMultipleScenes</key><false/>
+		<key>UISceneConfigurations</key>
+		<dict>
+			<key>UIWindowSceneSessionRoleApplication</key>
+			<array><dict><key>UISceneDelegateClassName</key><string>SPJitScene</string></dict></array>
+		</dict>
+	</dict>
+	<key>NSLocalNetworkUsageDescription</key><string>Finds this device's own developer services through the loopback VPN.</string>
+</dict>
+</plist>
