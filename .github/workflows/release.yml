@@ -161,7 +161,15 @@ jobs:
 
           curl -fsSL -o "$RUNNER_TEMP/DeveloperIDG2CA.cer" "$DEVELOPER_ID_CA_URL"
           echo "$DEVELOPER_ID_CA_SHA256  $RUNNER_TEMP/DeveloperIDG2CA.cer" | shasum -a 256 -c -
-          security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$keychain"
+          # Keychain Access's .p12 export usually carries this intermediate along with the identity, and
+          # a second import of it fails ("already exists"). Skip it when that exact certificate (by
+          # SHA-256) came in with the .p12; import it when the .p12 held only the leaf.
+          ca_hash=$(printf '%s' "$DEVELOPER_ID_CA_SHA256" | tr '[:lower:]' '[:upper:]')
+          if security find-certificate -a -Z "$keychain" | grep -qx "SHA-256 hash: $ca_hash"; then
+            echo "Developer ID G2 CA: already in the .p12"
+          else
+            security import "$RUNNER_TEMP/DeveloperIDG2CA.cer" -k "$keychain"
+          fi
 
           # Without this, the first codesign blocks on a UI prompt nobody can answer and the job hangs
           # until it times out.
