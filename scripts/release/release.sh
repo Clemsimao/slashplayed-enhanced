@@ -193,8 +193,13 @@ if [[ "$SIGNED" == yes ]]; then
   if [[ -n "${SPARKLE_ED_PRIVATE_KEY:-}" ]]; then
     SPARKLE_KEY_ARGS=(--ed-key-file -)
     # Sparkle's private key is the base64 of the 32-byte Ed25519 seed, CryptoKit's rawRepresentation
-    # (/usr/bin/openssl is LibreSSL without Ed25519). Read from stdin so it never appears in a process list.
-    SIGNING_PUBLIC_KEY="$(printf '%s' "$SPARKLE_ED_PRIVATE_KEY" | xcrun swift - 2>/dev/null <<'SWIFT' || true
+    # (/usr/bin/openssl is LibreSSL without Ed25519). The key goes in on stdin so it never appears in a
+    # process list, so the Swift source can't: it's a file (a `swift -` heredoc would take stdin from the
+    # pipe, and the script would read an empty key).
+    # swift runs a file only with the .swift extension, hence a directory rather than a mktemp file.
+    DERIVE_DIR="$(mktemp -d "${TMPDIR:-/tmp}/sp-release-derive.XXXXXX")"
+    DERIVE_SWIFT="$DERIVE_DIR/derive.swift"
+    cat > "$DERIVE_SWIFT" <<'SWIFT'
 import CryptoKit
 import Foundation
 let text = String(data: FileHandle.standardInput.readDataToEndOfFile(), encoding: .utf8)!
@@ -202,7 +207,8 @@ guard let seed = Data(base64Encoded: text.trimmingCharacters(in: .whitespacesAnd
       let key = try? Curve25519.Signing.PrivateKey(rawRepresentation: seed) else { exit(1) }
 print(key.publicKey.rawRepresentation.base64EncodedString())
 SWIFT
-)"
+    SIGNING_PUBLIC_KEY="$(printf '%s' "$SPARKLE_ED_PRIVATE_KEY" | xcrun swift "$DERIVE_SWIFT" 2>/dev/null || true)"
+    rm -rf "$DERIVE_DIR"
     [[ -n "$SIGNING_PUBLIC_KEY" ]] || { echo "error: SPARKLE_ED_PRIVATE_KEY isn't a Sparkle EdDSA private key (base64 of a 32-byte seed)" >&2; exit 1; }
   else
     SPARKLE_KEY_ARGS=(--account "$KEY_ACCOUNT")
