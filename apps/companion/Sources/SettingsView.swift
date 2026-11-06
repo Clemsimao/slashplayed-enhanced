@@ -234,7 +234,7 @@ struct SettingsView: View {
         panel.prompt = "Choose"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         guard let root = Flavor.installRoot(picked: url) else {
-            installError = "No game in \(url.path). Choose the folder holding _classic_era_, _anniversary_, _classic_, or _retail_."
+            installError = "No game in \(url.path). Choose the folder holding _classic_era_, _anniversary_, _classic_, _retail_, or _forever_."
             return
         }
         setInstall(root)

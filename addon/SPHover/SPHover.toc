@@ -1,4 +1,4 @@
-## Interface: 11509, 20506, 50504, 120105
+## Interface: 11509, 20506, 50504, 120105, 16001
 ## Title: SPHover
 ## Notes: Tells the visionOS shim where the clickable UI is, for the system's look highlight.
 SPHover.lua

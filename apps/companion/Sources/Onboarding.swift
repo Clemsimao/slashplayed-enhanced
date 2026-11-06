@@ -364,7 +364,7 @@ final class Onboarding {
     func pickInstall(_ folder: URL) -> Bool {
         guard let root = Flavor.installRoot(picked: folder) else {
             status[.install] = .problem("No game in \(folder.path)",
-                                        "Choose the World of Warcraft folder Battle.net installed into (it holds _classic_era_, _anniversary_, _classic_, or _retail_), or skip this step.")
+                                        "Choose the World of Warcraft folder Battle.net installed into (it holds _classic_era_, _anniversary_, _classic_, _retail_, or _forever_), or skip this step.")
             return false
         }
         Self.setInstall(root)

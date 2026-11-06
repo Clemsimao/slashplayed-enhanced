@@ -11,7 +11,7 @@ final class FlavorTests: XCTestCase {
             XCTAssertTrue(flavor.product.hasPrefix("wow"), flavor.rawValue)
         }
         XCTAssertEqual(Flavor.retail.name, "Retail")
-        XCTAssertEqual(Flavor.allCases.map(\.product), ["wow_classic_era", "wow_anniversary", "wow_classic", "wow"])
+        XCTAssertEqual(Flavor.allCases.map(\.product), ["wow_classic_era", "wow_anniversary", "wow_classic", "wow", "wowf"])
         XCTAssertEqual(Flavor.classicEra.clientPath, "World of Warcraft Classic.app/Contents/MacOS/World of Warcraft Classic")
         XCTAssertEqual(Flavor.anniversary.clientPath, Flavor.classicEra.clientPath)
         XCTAssertEqual(Flavor.classic.clientPath, Flavor.classicEra.clientPath)
@@ -28,7 +28,7 @@ final class FlavorTests: XCTestCase {
         XCTAssertEqual(Flavor.classic.product, "wow_classic")
         XCTAssertEqual(Flavor.classic.launcherArguments, ["-launcherlogin", "-uid", "wow_classic"])
         XCTAssertEqual(Flavor.classic.toc, 50504)
-        XCTAssertEqual(Flavor.allCases, [.classicEra, .anniversary, .classic, .retail])
+        XCTAssertEqual(Flavor.allCases, [.classicEra, .anniversary, .classic, .retail, .forever])
     }
 
     static let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appending(path: "../../..").standardizedFileURL

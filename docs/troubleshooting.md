@@ -241,7 +241,7 @@ Battle.net** in the menu by Play, which shows only when one of the device's game
 The onboarding step lists what it found and always passes.
 
 - **No game found, though one is installed**: it's somewhere other than `/Applications/World of
-  Warcraft`. Choose its folder (the one holding `_classic_era_`, `_anniversary_`, `_classic_`, or `_retail_`) in
+  Warcraft`. Choose its folder (the one holding `_classic_era_`, `_anniversary_`, `_classic_`, `_retail_`, or `_forever_`) in
   the onboarding step or Settings > Game Install.
 - **"No game in …"**: the folder you chose holds none of those. Choose the World of Warcraft folder
   itself, or use the default.

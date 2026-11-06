@@ -95,5 +95,23 @@ another -initialgamemode, but the game switches between them in the one running 
 		<key>toc</key>
 		<integer>120105</integer>
 	</dict>
+	<dict>
+		<key>id</key>
+		<string>forever</string>
+		<key>product</key>
+		<string>wowf</string>
+		<key>client</key>
+		<string>World of Warcraft.app/Contents/MacOS/World of Warcraft</string>
+		<key>name</key>
+		<string>WoW: Forever</string>
+		<key>arguments</key>
+		<array>
+			<string>-launcherlogin</string>
+			<string>-uid</string>
+			<string>wowf</string>
+		</array>
+		<key>toc</key>
+		<integer>16001</integer>
+	</dict>
 </array>
 </plist>

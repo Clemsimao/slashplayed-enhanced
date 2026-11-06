@@ -8,6 +8,8 @@ All notable changes to Slashplayed are documented here. The format is based on
 
 ### Added
 
+- WoW: Forever is a game you can install and play, on the Vision Pro, beside the others. (Tested on a
+  Vision Pro only, with build 1.60.1.)
 - Games can be installed on the iPad or iPhone itself, with no game files from a Mac: tap
   Install on the start screen, and the device downloads the game from Blizzard and sets it up.
 - Each game installed on the device has a Region in Settings (Americas, Europe, Korea, or Taiwan),
