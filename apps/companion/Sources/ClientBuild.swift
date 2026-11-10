@@ -207,12 +207,13 @@ enum ClientBuild {
             || GameStore.isVersion(image.version, newerThan: update.version) ? .caughtUp : .ahead
     }
 
-    /// A game's client in the device's Library/spgames: the stamp beside wow-<flavor>, and whether this Mac
-    /// copied it there (copyClient: spsource-<flavor> is beside it, which an update on the device deletes)
-    /// rather than an update on the device making it.
+    /// A game's client in the device's Library/spgames: the stamp beside wow-<flavor>, and where it came
+    /// from, spsource-<flavor>'s one word (`source`): `mac` (this Mac's copyClient), `updated` or `installed`
+    /// (the device fetched it: apps/client/sppatch.m), or nil without one.
     struct DeviceClient: Equatable {
         var stamp: ClientAssembly.Stamp
-        var fromMac: Bool
+        var source: String?
+        var fromMac: Bool { source == "mac" }
     }
 
     /// The device's clients of its games: each Library/spgames stamp beside its client, pulled with
@@ -232,7 +233,14 @@ enum ClientBuild {
             guard let text = try? String(contentsOf: url, encoding: .utf8),
                   let row = GameStore.BuildInfo(text)?.byProduct[flavor.product],
                   let client = try? ClientAssembly.Stamp.from(product: flavor.product, row: row) else { continue }
-            clients[flavor] = DeviceClient(stamp: client, fromMac: library["spgames/" + sourceFile(flavor)] != nil)
+            // The word, when there's one: a few bytes, pulled as the stamp is.
+            var source: String?
+            if (library["spgames/" + sourceFile(flavor)]?.size ?? 0) > 0 {
+                try? FileManager.default.removeItem(at: url)
+                try await Device.retrying { try await device.fetch("Library/spgames/" + sourceFile(flavor), to: url) }
+                source = (try? String(contentsOf: url, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            clients[flavor] = DeviceClient(stamp: client, source: source?.isEmpty == false ? source : nil)
         }
         return clients
     }
@@ -255,18 +263,20 @@ enum ClientBuild {
         return GameStore.isVersion(mac.version, newerThan: device.version) ? .copy : .newerOnDevice
     }
 
-    /// Where a client in Library/spgames came from, one word: `mac` for copyClient's.
+    /// Where a client in Library/spgames came from, one word: `mac` for copyClient's (DeviceClient.source).
     static func sourceFile(_ flavor: Flavor) -> String { "spsource-\(flavor.rawValue)" }
 
     /// Copies `flavor`'s client of `version` into the device's Library/spgames, for the launcher that loads
     /// the unchanged client with spguest (apps/client/spguest.c): the CDN's arm64 slice as wow-<flavor>, then its
     /// .build.info row (spbuildinfo-<flavor>, as an update on the device keeps it), spsource-<flavor>
     /// (`mac`), and the stamp last, so a stamp is only ever beside a whole client of its build. devicectl
-    /// can't delete, so a stamp already there (`replacing`) is emptied first: a copy cut short leaves no
-    /// stamp naming the old build beside the new client. Returns the slice's size.
+    /// can't delete, so the stamp is emptied first, whatever the listing said was there (one it couldn't
+    /// parse included): a copy cut short leaves no stamp naming the old build beside the new client.
+    /// `beforeWrite` runs once the slice is in hand, just before the first write (the caller stops a client
+    /// running on the device there), so a download that fails touches nothing on it. Returns the slice's size.
     @discardableResult
-    static func copyClient(_ flavor: Flavor, version: BlizzardCDN.Version, to device: Device, replacing: Bool,
-                           log: (String) -> Void) async throws -> Int64 {
+    static func copyClient(_ flavor: Flavor, version: BlizzardCDN.Version, to device: Device, log: (String) -> Void,
+                           beforeWrite: () async throws -> Void) async throws -> Int64 {
         let (slice, stamp) = try await clientSlice(flavor, latest: [flavor: version], log: log)
         let cdn = try await cdn.connected(product: flavor.product, region: flavor.region)
         guard let cdns = cdn.cdns else { throw Failure("Blizzard's patch service lists no CDN for \(flavor.name).") }
@@ -282,7 +292,8 @@ enum ClientBuild {
             return url
         }
         let dir = "Library/spgames/", stampPath = dir + ClientAssembly.Stamp.fileName(flavor.rawValue)
-        if replacing { try await device.copy(try staged("empty", ""), to: stampPath) }
+        try await beforeWrite()
+        try await device.copy(try staged("empty", ""), to: stampPath)
         try await device.copy(slice, to: dir + "wow-\(flavor.rawValue)")
         try await device.copy(try staged("row", row), to: dir + "spbuildinfo-\(flavor.rawValue)")
         try await device.copy(try staged("source", "mac\n"), to: dir + sourceFile(flavor))

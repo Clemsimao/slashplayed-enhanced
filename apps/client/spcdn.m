@@ -12,7 +12,9 @@
 // decoded MD5 is the content key the build config gives it. Unlike the companion's, nothing is cached but
 // the slice itself (the caller's `output`): the device fetches one build's once.
 #import "spcdn.h"
+#include "spguest.h"  // spguest_check_file
 #include <CommonCrypto/CommonDigest.h>
+#include <mach-o/loader.h>
 #include <stdatomic.h>
 #include <zlib.h>
 
@@ -912,19 +914,37 @@ NSString *sp_config_with_region(NSString *config, NSDictionary<NSString *, NSStr
     return text;
 }
 
-// ---- installing a game on the device (launcher.m, sppatch.m)
+// ---- the game's client in Library/spgames (launcher.m, sppatch.m)
 
-NSArray<NSString *> *sp_games(NSArray<NSString *> *order, NSArray<NSString *> *bundled, NSArray<NSString *> *made,
-                              NSSet<NSString *> **installable) {
+NSString *sp_slice_problem(NSString *path) {
+    char why[256];
+    return spguest_check_file(path.fileSystemRepresentation, why, sizeof why) ? nil : @(why);
+}
+
+NSString *sp_slice_retire(NSString *games, NSString *flavor, NSString *product) {
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSString *file = [games stringByAppendingPathComponent:[@"wow-" stringByAppendingString:flavor]];
+    if (![fm fileExistsAtPath:file]) return nil;
+    NSString *why = sp_slice_problem(file);
+    if (!why) return nil;
+    NSString *stamp = [games stringByAppendingPathComponent:[@"spbuild-" stringByAppendingString:flavor]];
+    NSString *version = sp_table_row([NSString stringWithContentsOfFile:stamp encoding:NSUTF8StringEncoding error:nil], @"Product",
+                                     product)[@"Version"];
+    unsigned long long size = [fm attributesOfItemAtPath:file error:nil].fileSize;
+    [fm removeItemAtPath:stamp error:nil];
+    [fm removeItemAtPath:file error:nil];
+    for (NSString *name in @[@"spbuildinfo-", @"spsource-"])
+        [fm removeItemAtPath:[games stringByAppendingPathComponent:[name stringByAppendingString:flavor]] error:nil];
+    return [NSString stringWithFormat:@"retired Library/spgames/wow-%@ (%@ %@, %.1f MB): %@; the game data stays", flavor, product,
+                                      version ?: @"with no stamp", size / 1e6, why];
+}
+
+NSArray<NSString *> *sp_games(NSArray<NSString *> *order, NSArray<NSString *> *made, NSSet<NSString *> **installable) {
     NSMutableSet<NSString *> *none = [NSMutableSet set];
-    NSArray<NSString *> *games = bundled;
-    if (!bundled.count) {
-        games = order;
-        for (NSString *f in order)
-            if (![made containsObject:f]) [none addObject:f];
-    }
+    for (NSString *f in order)
+        if (![made containsObject:f]) [none addObject:f];
     *installable = none;
-    return [games sortedArrayUsingComparator:^NSComparisonResult(NSString *a, NSString *b) {
+    return [order sortedArrayUsingComparator:^NSComparisonResult(NSString *a, NSString *b) {
         NSUInteger ia = [order indexOfObject:a], ib = [order indexOfObject:b];
         return ia < ib ? NSOrderedAscending : ia > ib ? NSOrderedDescending : [a compare:b];
     }];
