@@ -47,6 +47,13 @@ final class FlavorTests: XCTestCase {
         XCTAssertEqual(Flavor.retail.toc, 120105)
     }
 
+    /// Touch bars are only installed for Forever, so their TOC must track that flavor's current API.
+    func testTouchBarsTargetsForeverInterface() throws {
+        let toc = try String(contentsOf: Self.repo.appending(path: "addon/SPTouchBars/SPTouchBars.toc"), encoding: .utf8)
+        let lines = toc.split(separator: "\n").filter { $0.hasPrefix("## Interface:") }
+        XCTAssertEqual(lines.map(String.init), ["## Interface: \(Flavor.forever.toc)"])
+    }
+
     /// The toc from a build's version, as flavors.plist's comment gives the rule: 12.1.5.70575 is 120105.
     static func toc(version: String) -> Int? {
         let parts = version.split(separator: ".").prefix(3).compactMap { Int($0) }

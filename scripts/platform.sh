@@ -11,7 +11,7 @@
 # (CFBundleSupportedPlatforms), @DTPLATFORM@, @MINOS@, @FAMILY@ (UIDeviceFamily integers), @PLATFORM_KEYS@
 # (keys only this platform gets: on iOS a launch screen, without which the app runs in a scaled
 # 1024x768 compatibility mode, no status bar, and landscape only on an iPhone (it came up portrait and
-# cropped; the iPad's window is landscape whatever the orientation, so it's left alone); on both the
+# cropped; iPad explicitly permits portrait and landscape); on both the
 # app icon's keys, as actool's partial Info.plist has them for apps/client/build-icons.sh's catalog), and
 # @VERSION@ (CFBundleShortVersionString: SP_VERSION).
 #   SP_VERSION      the device app's version: the companion's MARKETING_VERSION (apps/companion/project.yml),
@@ -38,6 +38,7 @@ case $SP_PLATFORM in
     _plat=iPhoneOS; _family='<integer>1</integer><integer>2</integer>'; SP_SUFFIX=-ios
     _keys='<key>UILaunchScreen</key><dict/><key>UIStatusBarHidden</key><true/>'
     _keys="$_keys<key>UISupportedInterfaceOrientations~iphone</key><array><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>"
+    _keys="$_keys<key>UISupportedInterfaceOrientations~ipad</key><array><string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationPortraitUpsideDown</string><string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>"
     _keys="$_keys<key>CFBundleIcons</key><dict><key>CFBundlePrimaryIcon</key><dict><key>CFBundleIconFiles</key><array><string>AppIcon60x60</string></array><key>CFBundleIconName</key><string>AppIcon</string></dict></dict>"
     _keys="$_keys<key>CFBundleIcons~ipad</key><dict><key>CFBundlePrimaryIcon</key><dict><key>CFBundleIconFiles</key><array><string>AppIcon60x60</string><string>AppIcon76x76</string></array><key>CFBundleIconName</key><string>AppIcon</string></dict></dict>" ;;
   *) echo "unknown SP_PLATFORM $SP_PLATFORM (xros, ios)" >&2; exit 1 ;;

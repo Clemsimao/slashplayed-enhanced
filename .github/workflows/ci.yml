@@ -12,7 +12,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [main]
+    branches: [main, enhanced]
 
 permissions:
   contents: read
@@ -132,6 +132,22 @@ jobs:
           done <<<"$files"
           echo "build=$build" >> "$GITHUB_OUTPUT"
           echo "build=$build"
+
+  thumb-input-test:
+    needs: changes
+    if: ${{ !cancelled() && needs.changes.outputs.build != 'false' }}
+    runs-on: xcode-27
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Select Xcode
+        run: sudo xcode-select -s "$XCODE_APP/Contents/Developer"
+      - name: Replay thumb-button and joystick input in an iPad simulator
+        run: shims/appkit/test-thumb.sh
+      - name: Verify resolutions and portrait rotation in an iPad simulator
+        run: bash shims/appkit/test-display.sh
 
   # The companion's build and its tests, as two jobs on two runners so the run takes about as long as
   # the slower of them rather than both in a row: test.sh builds into its own DerivedData (Debug, beside

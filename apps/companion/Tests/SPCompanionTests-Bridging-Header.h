@@ -4,6 +4,7 @@
 #import "../../client/spassemble.h"
 #import "../../client/spbind.h"
 #import "../../client/spcdn.h"
+#import "../../client/spaddons.h"
 #import "../../client/spsign.h"
 // spzsign.cpp's entry (spsign.m declares it for itself): DeviceSigningTests reads zsign's messages from it.
 int sp_zsign(const char *path, const char *identifier, const void *p12, size_t p12_len, const char *password,

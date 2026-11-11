@@ -27,8 +27,9 @@ enum ClientAssembly {
         var dtPlatform: String
         var family: String
         /// @PLATFORM_KEYS@: on iOS a launch screen, without which the app runs in a scaled 1024x768
-        /// compatibility mode, no status bar, and landscape only on an iPhone (as scripts/platform.sh); on
-        /// both the keys naming the app icon (the bundled icon/, apps/client/build-icons.sh), as actool's
+        /// compatibility mode, no status bar, landscape only on an iPhone, and all orientations on an
+        /// iPad (as scripts/platform.sh); on both the keys naming the app icon (the bundled icon/,
+        /// apps/client/build-icons.sh), as actool's
         /// partial Info.plist has them.
         var platformKeys: String
 
@@ -42,6 +43,9 @@ enum ClientAssembly {
                                   family: "<integer>1</integer><integer>2</integer>",
                                   platformKeys: "<key>UILaunchScreen</key><dict/><key>UIStatusBarHidden</key><true/>"
                                       + "<key>UISupportedInterfaceOrientations~iphone</key><array>"
+                                      + "<string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>"
+                                      + "<key>UISupportedInterfaceOrientations~ipad</key><array>"
+                                      + "<string>UIInterfaceOrientationPortrait</string><string>UIInterfaceOrientationPortraitUpsideDown</string>"
                                       + "<string>UIInterfaceOrientationLandscapeLeft</string><string>UIInterfaceOrientationLandscapeRight</string></array>"
                                       + "<key>CFBundleIcons</key><dict><key>CFBundlePrimaryIcon</key><dict>"
                                       + "<key>CFBundleIconFiles</key><array><string>AppIcon60x60</string></array>"
@@ -203,9 +207,10 @@ enum ClientAssembly {
 
     /// The addons the device app carries, at addons/<name>/ (as addon/ has them), which its launcher puts
     /// in each game's folder before the client loads (apps/client/spcdn.m's sp_addons_place: SPMovie on every
-    /// device, SPHover on the headset), as build.sh's app has them. Both on both platforms: the launcher
+    /// device, SPHover on the headset, and SPTouchBars for Forever), as build.sh's app has them. All on both platforms: the launcher
     /// decides. bundle-resources.sh bundles them in Resources/addons/.
-    static let addonFiles = ["SPMovie/SPMovie.toc", "SPMovie/SPMovie.lua", "SPHover/SPHover.toc", "SPHover/SPHover.lua"]
+    static let addonFiles = ["SPMovie/SPMovie.toc", "SPMovie/SPMovie.lua", "SPHover/SPHover.toc", "SPHover/SPHover.lua",
+                             "SPTouchBars/SPTouchBars.toc", "SPTouchBars/SPTouchBars.lua", "SPTouchBars/SPTouchBars.tga"]
 
     /// Assembles an unsigned Slashplayed.app at `app` from the given clients (flavor raw value → the Mac
     /// client, universal or its arm64 slice, and the build it is, for its Stamp) and the companion's resources: `platformResources` (<platform>/: the shims, the

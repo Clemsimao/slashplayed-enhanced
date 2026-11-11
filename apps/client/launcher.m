@@ -50,6 +50,7 @@
 #include <CommonCrypto/CommonDigest.h>
 #import "spassemble.h"
 #import "spcdn.h"  // sp_table_row, sp_build_info_for_image, sp_flavor_info
+#import "spaddons.h"
 #import "spsign.h"
 
 static void say(NSString *s) {
@@ -800,11 +801,17 @@ int main(int argc, char **argv) {
     skip_intro(flavor);
     flavor_info(flavor);
     // The addons the app carries, into the game's folder before the client loads (sp_addons_place): SPMovie
-    // everywhere, SPHover on the headset. The device's own copy, so a game it installed has them too.
+    // everywhere, SPHover on the headset, and SPTouchBars for Forever. The device's own copy, so a game it installed has them too.
     NSString *addons = nil;
     sp_addons_place([dir stringByAppendingPathComponent:@"addons"],
                     [NSHomeDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"Documents/_%@_", flavor]],
-                    TARGET_OS_VISION, &addons);
+                    flavor, TARGET_OS_VISION, &addons);
+    say(addons);
+    // Download the optional bag addon once, directly from its publisher. The cached ZIP also repairs
+    // missing files offline, and a failed download never prevents starting the game.
+    sp_bagnon_place([NSHomeDirectory() stringByAppendingPathComponent:@"Library/spaddons"],
+                    [NSHomeDirectory() stringByAppendingPathComponent:[NSString stringWithFormat:@"Documents/_%@_", flavor]],
+                    flavor, sp_cdn_session(pump, 8, nil), &addons);
     say(addons);
     launch_arguments(flavor, &argc, &argv);
     // Whether a newer build is out than the image's (sppatch.m), which also picks the image: the bundled one

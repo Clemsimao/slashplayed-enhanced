@@ -1,0 +1,8 @@
+## Interface: 16001
+## Title: SPTouchBars
+## IconTexture: Interface\Icons\Ability_DualWield
+## Notes: Movable circular spells, modifier layers, and a bottom utility bar for touchscreens.
+## Author: Slashplayed contributors
+## Version: 0.6.4
+## SavedVariablesPerCharacter: SPTouchBarsDB
+SPTouchBars.lua

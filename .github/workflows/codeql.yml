@@ -17,9 +17,9 @@ on:
   # No paths filter on any trigger: the ruleset wants CodeQL results on every PR, so a skipped run would
   # leave the PR blocked.
   push:
-    branches: [main]
+    branches: [main, enhanced]
   pull_request:
-    branches: [main]
+    branches: [main, enhanced]
   # Weekly, as default setup did: new queries in a CodeQL release find things in unchanged code.
   schedule:
     - cron: "23 6 * * 1"

@@ -15,7 +15,7 @@
 // and the client, whose size didn't change, hears nothing.
 //
 // On visionOS the screen is a fixed size, at least as big as the scene window gets (2218x1307 pt seen);
-// on iPad it's the real screen, landscape. The client
+// on iPad it follows the scene's orientation and covers every enabled render resolution. The client
 // reads the display (here and in the CoreGraphics shim, which asks NSScreen) once at startup and caps
 // its drawable at the display's pixel size; a screen the size of the launch window capped it there,
 // and larger windows got a stretched image.
@@ -23,6 +23,7 @@
 // the screen, as a Stage Manager window is, and the drawable cap is the screen's.
 
 #include <objc/message.h>
+#include "spdisplaygeometry.h"
 
 @interface NSScreen (SPUIKitDecl)
 + (instancetype)mainScreen;
@@ -124,37 +125,143 @@ static CGRect sp_scene_rect(void) {
     return CGRectMake(0, 0, size.width, size.height);
 }
 
-static CGRect sp_screen_rect(void) {
+static CGRect sp_device_screen_rect(void) {
 #if TARGET_OS_VISION
     return CGRectMake(0, 0, 2560, 1440);
 #else
-    // iPad: the real screen, landscape (the game's orientation), whatever the orientation at startup.
-    // A Stage Manager window is never bigger. UIKit is up before the client asks (sp_uikit_early).
+    // Match the window's orientation, including an iPad launched or rotated into portrait. Using a
+    // landscape height in portrait caps the client's drawable before it fills the window.
     CGSize s = sp_window.windowScene ? sp_window.windowScene.screen.bounds.size : sp_scene_rect().size;
-    return CGRectMake(0, 0, MAX(s.width, s.height), MIN(s.width, s.height));
+    return sp_screen_in_orientation(s, sp_scene_rect().size);
 #endif
 }
 
-// Backing pixels per point: $SP_SCALE (run.sh's dev override), else the device's setting (the start
-// screen's Settings > Display: NSUserDefaults "sp_scale", spstart.m's sp_scale_key, 1 or 2; unset is
-// Automatic), else 1, or 2 on an iPhone. On the headset at 2 retail was GPU-bound below 90 fps; 1 frees
+static BOOL sp_scale_overridden(void) {
+    const char *env = getenv("SP_SCALE");
+    return env && isfinite(atof(env)) && atof(env) > 0;
+}
+
+// Default backing pixels per point: $SP_SCALE (the dev override), else the legacy "sp_scale"
+// preference, else 1, or 2 on an iPhone. The scale picker is gone; keep existing preferences so an
+// update doesn't change a player's default. On the headset at 2 retail was GPU-bound below 90 fps; 1 frees
 // most of the GPU but didn't delay the heat (2026-10-14). An iPhone's screen is small enough that 1x
 // (874x402 on a 16 Pro) makes the UI's text unreadable, while the 3D world looks fine: so 2x, with the
-// game's own render scale at 50% (launcher.m) to keep the world's GPU cost near 1x's. Read once and
-// kept, so it can't change under the client: the first read is the launcher's (sp_backing_scale, for
-// that 50%), after the start screen, so a change in Settings applies to the game it starts.
-static CGFloat sp_scale_now(void) {
+// game's own render scale at 50% (launcher.m) to keep the world's GPU cost near 1x's. This is Native's
+// scale, read after the start screen; a mode selected in WoW supplies its own scale below.
+static CGFloat sp_native_scale(void) {
     static CGFloat scale;
     if (!scale) {
         const char *env = getenv("SP_SCALE");
         NSInteger set = [NSUserDefaults.standardUserDefaults integerForKey:@"sp_scale"];
-        scale = env && atof(env) > 0 ? atof(env)
+        scale = env && isfinite(atof(env)) && atof(env) > 0 ? atof(env)
               : set == 1 || set == 2 ? set
               : UIDevice.currentDevice.userInterfaceIdiom == UIUserInterfaceIdiomPhone ? 2 : 1;
         sp_stub_log([NSString stringWithFormat:@"backing scale %gx (%s)", scale,
-                     env && atof(env) > 0 ? "SP_SCALE" : set == 1 || set == 2 ? "Settings" : "Automatic"].UTF8String);
+                     sp_scale_overridden() ? "SP_SCALE" : set == 1 || set == 2 ? "Settings" : "Automatic"].UTF8String);
     }
     return scale;
+}
+
+// Keep the existing default and saved selection, including older backing-scale preferences, but
+// always expose the complete catalog in WoW. Small stable IDs name the screen-relative modes;
+// long-edge IDs name fixed presets. An old availability toggle must never hide a valid game choice.
+enum { SPResolutionFullDetail = 1, SPResolutionLowerPower = 2 };
+static NSArray<NSNumber *> *sp_resolution_catalog(void) {
+    return @[@0, @(SPResolutionLowerPower), @1920, @2560, @(SPResolutionFullDetail)];
+}
+
+static BOOL sp_resolution_available(NSInteger resolution) {
+    if (!resolution) return YES;
+    return !sp_scale_overridden() && [sp_resolution_catalog() containsObject:@(resolution)];
+}
+
+static CGFloat sp_resolution_scale(NSInteger resolution, CGSize points) {
+    if (resolution == SPResolutionLowerPower) return 1;
+    if (resolution == SPResolutionFullDetail) {
+#if TARGET_OS_VISION
+        return 2;
+#else
+        UIScreen *screen = sp_window.windowScene.screen;
+        CGFloat scale = screen ? screen.scale : 2;
+        return MAX(1, scale);
+#endif
+    }
+    return resolution ? resolution / MAX(1, MAX(points.width, points.height)) : sp_native_scale();
+}
+
+static NSInteger sp_selected_resolution = -1;
+static NSInteger sp_resolution_now(void) {
+    if (sp_selected_resolution < 0) {
+        NSInteger saved = [NSUserDefaults.standardUserDefaults integerForKey:@"sp_resolution"];
+        sp_selected_resolution = sp_resolution_available(saved) ? saved : 0;
+        if (saved != sp_selected_resolution && !sp_scale_overridden()) {
+            [NSUserDefaults.standardUserDefaults setInteger:sp_selected_resolution forKey:@"sp_resolution"];
+        }
+        // A screen-relative choice can equal the legacy default. Keep one canonical selection,
+        // just as the menu deduplicates those identical pixel sizes.
+        if ((sp_selected_resolution == SPResolutionLowerPower || sp_selected_resolution == SPResolutionFullDetail) &&
+            fabs(sp_resolution_scale(sp_selected_resolution, CGSizeZero) - sp_native_scale()) < 0.00001) {
+            sp_selected_resolution = 0;
+            [NSUserDefaults.standardUserDefaults setInteger:0 forKey:@"sp_resolution"];
+        }
+    }
+    return sp_selected_resolution;
+}
+
+static BOOL sp_select_resolution(NSInteger resolution) {
+    if (!sp_resolution_available(resolution)) return NO;
+    if (sp_resolution_now() != resolution) {
+        sp_selected_resolution = resolution;
+        [NSUserDefaults.standardUserDefaults setInteger:resolution forKey:@"sp_resolution"];
+        NSString *label = resolution == SPResolutionFullDetail ? @"Full detail"
+                         : resolution == SPResolutionLowerPower ? @"Lower power"
+                         : resolution ? @(resolution).stringValue : @"Default";
+        sp_stub_log([NSString stringWithFormat:@"game selected resolution: %@", label].UTF8String);
+    }
+    return YES;
+}
+
+static CGFloat sp_scale_now(void) {
+    NSInteger resolution = sp_resolution_now();
+    CGSize size = sp_scene_rect().size;
+    return sp_resolution_scale(resolution, size);
+}
+
+static CGSize sp_mode_pixels(NSInteger resolution) {
+    CGSize size = sp_scene_rect().size;
+    CGFloat scale = sp_resolution_scale(resolution, size);
+    return sp_resolution_pixels(size, scale, resolution != 0);
+}
+
+// A virtual screen large enough for every enabled preset, independent of the current low-power
+// drawable. Otherwise WoW clamps a higher selection to the old display ceiling before requesting it.
+static CGRect sp_screen_rect(void) {
+    CGSize device = sp_device_screen_rect().size;
+    CGSize pixels = CGSizeMake(device.width * sp_native_scale(), device.height * sp_native_scale());
+    for (NSNumber *preset in sp_resolution_catalog()) if (sp_resolution_available(preset.integerValue)) {
+        CGSize mode = sp_mode_pixels(preset.integerValue);
+        pixels.width = MAX(pixels.width, mode.width);
+        pixels.height = MAX(pixels.height, mode.height);
+    }
+    // Screen geometry describes the available hardware ceiling, not the active window's render
+    // scale. Shrinking it after selecting 1920 makes the client's next 2560 selection a no-op.
+    CGFloat scale = sp_native_scale();
+    return CGRectMake(0, 0, pixels.width / scale, pixels.height / scale);
+}
+
+// Fullscreen-windowed clients can select a mode by resizing their window or their drawable, without
+// calling CGDisplaySetDisplayMode. Accept only an advertised size; ignore their generic startup size.
+static BOOL sp_announcing_display;
+static BOOL sp_select_pixel_size(CGSize pixels) {
+    if (sp_announcing_display) return NO;
+    for (NSNumber *preset in sp_resolution_catalog()) {
+        NSInteger resolution = preset.integerValue;
+        if (!sp_resolution_available(resolution)) continue;
+        CGSize mode = sp_mode_pixels(resolution);
+        if (fabs(pixels.width - mode.width) < 0.5 && fabs(pixels.height - mode.height) < 0.5)
+            return sp_select_resolution(resolution);
+    }
+    return NO;
 }
 
 // The launcher's read of it (launcher.m's default_render_scale), so the precedence lives here alone.
@@ -162,8 +269,8 @@ __attribute__((visibility("default"))) double sp_backing_scale(void) { return sp
 #define sp_scale sp_scale_now()
 
 static CGRect sp_to_backing(CGRect r) {
-    return CGRectMake(r.origin.x * sp_scale, r.origin.y * sp_scale, r.size.width * sp_scale,
-                      r.size.height * sp_scale);
+    CGSize size = sp_resolution_pixels(r.size, sp_scale, sp_resolution_now() != 0);
+    return CGRectMake(r.origin.x * sp_scale, r.origin.y * sp_scale, size.width, size.height);
 }
 
 static CGRect sp_from_backing(CGRect r) {
@@ -185,6 +292,18 @@ static void sp_set_rect(id obj, void *key, CGRect r) {
 }
 
 @implementation NSScreen (SPUIKit)
+- (NSArray *)sp_displayModes {
+    NSMutableArray *modes = [NSMutableArray array];
+    for (NSNumber *preset in sp_resolution_catalog()) if (sp_resolution_available(preset.integerValue)) {
+        CGSize pixels = sp_mode_pixels(preset.integerValue);
+        BOOL duplicate = NO;
+        for (NSDictionary *mode in modes) if (CGSizeEqualToSize([mode[@"Pixels"] CGSizeValue], pixels)) duplicate = YES;
+        if (!duplicate) [modes addObject:@{@"Resolution": preset, @"Pixels": [NSValue valueWithCGSize:pixels]}];
+    }
+    return modes;
+}
+- (BOOL)sp_selectResolution:(NSInteger)resolution { return sp_select_resolution(resolution); }
+- (NSInteger)sp_selectedResolution { return sp_resolution_now(); }
 + (NSArray *)screens {
     return @[ [self mainScreen] ];
 }
@@ -201,19 +320,21 @@ static void sp_set_rect(id obj, void *key, CGRect r) {
     return sp_screen_rect();
 }
 - (CGFloat)backingScaleFactor {
-    return sp_scale;
+    return sp_native_scale();
 }
 - (CGRect)convertRectToBacking:(CGRect)r {
-    return sp_to_backing(r);
+    CGFloat scale = sp_native_scale();
+    return CGRectMake(r.origin.x * scale, r.origin.y * scale, r.size.width * scale, r.size.height * scale);
 }
 - (CGRect)convertRectFromBacking:(CGRect)r {
-    return sp_from_backing(r);
+    CGFloat scale = sp_native_scale();
+    return CGRectMake(r.origin.x / scale, r.origin.y / scale, r.size.width / scale, r.size.height / scale);
 }
 - (NSDictionary *)deviceDescription {
     return @{
         @"NSScreenNumber": @1,  // CGDirectDisplayID
         @"NSDeviceSize": [NSValue valueWithCGSize:sp_screen_rect().size],
-        @"NSDeviceResolution": [NSValue valueWithCGSize:CGSizeMake(72 * sp_scale, 72 * sp_scale)],
+        @"NSDeviceResolution": [NSValue valueWithCGSize:CGSizeMake(72 * sp_native_scale(), 72 * sp_native_scale())],
     };
 }
 @end
@@ -246,6 +367,13 @@ static void sp_set_rect(id obj, void *key, CGRect r) {
     sp_stub_log([NSString stringWithFormat:@"-[%s setFrame:{%g,%g,%g,%g}] (pinned to the scene window)",
                  object_getClassName(self), frame.origin.x, frame.origin.y, frame.size.width,
                  frame.size.height].UTF8String);
+    // AppKit frames are points. At the 1920 preset, WoW requests about 1821.33x1366 points for a
+    // 2560x1920 drawable. Comparing that frame directly to pixel modes silently ignores the choice.
+    CGFloat previous_scale = sp_scale;
+    CGSize pixels = CGSizeMake(frame.size.width * previous_scale, frame.size.height * previous_scale);
+    if (!sp_select_pixel_size(pixels) &&
+        !sp_select_pixel_size(sp_resolution_pixels(frame.size, previous_scale, YES)))
+        sp_select_pixel_size(frame.size);  // clients that pass the advertised pixel size directly
     frame = sp_scene_rect();
     sp_set_rect(self, &sp_frame_key, frame);
     NSView *view = objc_getAssociatedObject(self, &sp_content_view_key);
@@ -306,7 +434,20 @@ static void sp_set_rect(id obj, void *key, CGRect r) {
 // game rect of the UIKit window, the one content view there is. The present hook (sp_hover_attach) goes
 // in with it, and the loading screen comes down at the first present, so neither may happen for a layer
 // off screen.
+static CALayer *sp_resolution_layer;
+static void (*sp_drawable_size_orig)(id, SEL, CGSize);
+static void sp_drawable_size(id layer, SEL selector, CGSize size) {
+    if (layer == sp_resolution_layer) sp_select_pixel_size(size);
+    sp_drawable_size_orig(layer, selector, size);
+}
+
 static void sp_layer_show(CALayer *l) {
+    sp_resolution_layer = l;
+    static dispatch_once_t once;
+    dispatch_once(&once, ^{
+        Method method = class_getInstanceMethod(NSClassFromString(@"CAMetalLayer"), sel_registerName("setDrawableSize:"));
+        if (method) sp_drawable_size_orig = (void *)method_setImplementation(method, (IMP)sp_drawable_size);
+    });
     l.frame = sp_game_rect();
     l.contentsScale = sp_scale;
     [sp_window.rootViewController.view.layer addSublayer:l];
@@ -424,7 +565,7 @@ static void sp_scene_connect_late(void) {
     return sp_from_backing(r);
 }
 - (CGSize)convertSizeToBacking:(CGSize)s {
-    return CGSizeMake(s.width * sp_scale, s.height * sp_scale);
+    return sp_resolution_pixels(s, sp_scale, sp_resolution_now() != 0);
 }
 - (CGSize)convertSizeFromBacking:(CGSize)s {
     return CGSizeMake(s.width / sp_scale, s.height / sp_scale);
@@ -436,6 +577,8 @@ static void sp_scene_connect_late(void) {
 // The game rect (UIKit points, in the scene window) the client, its layer, the look highlights and the
 // cursor were last fitted to; empty until the first fit.
 static CGRect sp_told_rect;
+static CGRect sp_told_screen;
+static CGFloat sp_told_scale;
 static void sp_game_moved(CGRect game);  // spevent.m: the look highlights and the cursor follow the game
 
 static void sp_set_layer_frame(CALayer *l, CGRect frame) {
@@ -459,7 +602,7 @@ static void sp_set_layer_frame(CALayer *l, CGRect frame) {
 // 0,0, once while handling the first resize (iPhone 16 Pro, 2026-10-31), so the layer goes back to the
 // game rect's origin, and telling the client again would only have it do that again.
 static void sp_window_track_scene(void) {
-    if (!sp_window || !sp_client_window) return;
+    if (!sp_window || !sp_client_window || sp_announcing_display) return;
     CGRect game = sp_game_rect();
     CGSize size = game.size;
     if (size.width <= 0 || size.height <= 0) return;
@@ -471,7 +614,11 @@ static void sp_window_track_scene(void) {
     BOOL layer_resized = layer && !CGSizeEqualToSize(layer.frame.size, sp_told_rect.size);
     BOOL resized = !CGSizeEqualToSize(size, sp_told_rect.size);
     BOOL moved = !CGPointEqualToPoint(game.origin, sp_told_rect.origin);
-    if (!resized && !moved && !layer_off) return;
+    CGRect screen = sp_screen_rect();
+    CGFloat scale = sp_scale;
+    BOOL display_changed = !CGRectEqualToRect(screen, sp_told_screen);
+    BOOL scale_changed = scale != sp_told_scale;
+    if (!resized && !moved && !layer_off && !display_changed && !scale_changed) return;
     // The first time too: at launch the client sized its layer and drawable for the screen.
     static int layer_fixes;  // logged up to 20 times, in case the client keeps at it
     if (resized || moved) {
@@ -493,12 +640,45 @@ static void sp_window_track_scene(void) {
                      size.width, size.height, game.origin.x, game.origin.y].UTF8String);
     }
     sp_told_rect = game;
-    if (layer) sp_set_layer_frame(layer, game);
+    sp_told_screen = screen;
+    sp_told_scale = scale;
+    if (layer) {
+        sp_set_layer_frame(layer, game);
+        layer.contentsScale = scale;
+    }
     sp_game_moved(game);
-    if (!resized && !layer_resized) return;  // moved, or the layer displaced, only
+    NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
+    sp_announcing_display = YES;
+    // The game caches its display's drawable ceiling. Send the same display-change signals as a
+    // Mac before the resize, so a landscape launch can grow to portrait's taller drawable.
+    if (display_changed || scale_changed) {
+        void (*changed)(void) = (void (*)(void))dlsym(RTLD_DEFAULT, "sp_display_reconfigured");
+        // The launcher may have loaded the game's dependencies RTLD_LOCAL. Find that existing
+        // CoreGraphics image by its bundle path as well; never load a second copy for a notification.
+        if (!changed) {
+            NSString *path = [NSBundle.mainBundle.bundlePath stringByAppendingPathComponent:@"Frameworks/libspCoreGraphics.dylib"];
+            void *cg = dlopen(path.fileSystemRepresentation, RTLD_LAZY | RTLD_NOLOAD);
+            if (cg) {
+                changed = (void (*)(void))dlsym(cg, "sp_display_reconfigured");
+                dlclose(cg);
+            }
+        }
+        if (changed) changed();
+        [nc postNotificationName:@"NSApplicationDidChangeScreenParametersNotification" object:sp_NSApp];
+    }
+    if (scale_changed) {
+        NSNotification *backing = [NSNotification notificationWithName:@"NSWindowDidChangeBackingPropertiesNotification" object:window];
+        id delegate = [window delegate];
+        if ([delegate respondsToSelector:@selector(windowDidChangeBackingProperties:)])
+            ((void (*)(id, SEL, id))objc_msgSend)(delegate, @selector(windowDidChangeBackingProperties:), backing);
+        [nc postNotification:backing];
+    }
+    if (!resized && !layer_resized && !scale_changed) {
+        sp_announcing_display = NO;
+        return;  // moved, or the layer displaced, only
+    }
     CGRect frame = CGRectMake(0, 0, size.width, size.height);
     sp_set_rect(window, &sp_frame_key, frame);
-    NSNotificationCenter *nc = NSNotificationCenter.defaultCenter;
     if (view) {
         [view setFrame:frame];
         [nc postNotificationName:@"NSViewFrameDidChangeNotification" object:view];
@@ -508,4 +688,5 @@ static void sp_window_track_scene(void) {
     if ([delegate respondsToSelector:@selector(windowDidResize:)])
         ((void (*)(id, SEL, id))objc_msgSend)(delegate, @selector(windowDidResize:), n);
     [nc postNotification:n];
+    sp_announcing_display = NO;
 }

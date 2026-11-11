@@ -62,6 +62,8 @@ static void sp_switch_to(BOOL uikit) {
 
 static UIWindow *sp_window;
 static BOOL sp_scene_active;  // the scene has been active at least once (sp_uikit_early waits for it)
+// Readiness survives an input view being attached/recreated after the one-shot first-frame event.
+static atomic_bool sp_game_presented;
 static UIViewController *sp_make_root_view_controller(void);  // spevent.m: its view collects input
 static void sp_loading_attach(void);  // sploading.m
 static void sp_window_scene_connected(void);  // spwindow.m

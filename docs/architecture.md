@@ -298,14 +298,21 @@ images hasn't installed yet, [below](#installing-a-game-on-the-device)). Its fac
 ships unmodified with its license (`scripts/fetch-font.sh`; it's never committed). The gear opens
 Settings, a stock dark inset-grouped sheet in SwiftUI (`spsettings.swift`), one for iOS and visionOS:
 
+The sheet uses a category sidebar on iPad, with Controls, Display, Games, Account, and About.
+`NavigationSplitView` adapts to narrow windows. Controls has individual joystick, R, and keyboard
+pages; instructions are always visible below their controls. Game details and Game Updates are
+under Games, Battle.net under Account, and licenses under About. Existing preferences keep their keys.
+
 - **Battle.net**: whether a sign-in is saved; **Show Email** (the one place the saved email is shown,
   read from the keychain inside `splogin.m` at the tap and hidden again when the app goes to the
   background, the sheet closes, or a game starts); **Forget My Sign-In**; or, with none saved,
   **Sign In…**, which presents the sign-in screen to save one ahead of time.
 - **Game Updates**: the signing identity's state, dates only (`sp_identity_reading`, the same reading
   the log line and `Library/spidentity.txt` use), and **Forget Signing Identity**.
-- **Display**: Scale, Automatic, 1x, or 2x, the backing scale for every launch on this device (Render
-  scale, under Window, screen and scene tracking).
+- **Display**: a read-only list of render resolutions with dimensions and battery/detail descriptions.
+  Every supported mode is offered in WoW, including full screen detail. Choose the active resolution
+  there; `sp_resolution` remembers it. Old `sp_resolutions` availability switches are ignored, and
+  the former Scale picker is gone. Existing `sp_scale` preferences remain the legacy default baseline.
 - **A section per game**: the build it starts with, shipped with the app, updated on this device, or
   installed on it (`sp_game_build`, by the launcher's own rules; "Not Installed" for a game an app
   without images hasn't installed yet, [below](#installing-a-game-on-the-device)), its **Region** (a picker
@@ -431,14 +438,29 @@ region and languages in tests, and the Settings drill `region-<flavor>-<region>`
 
 ### The addons
 
-The device app carries the addons, `addons/SPMovie/` and `addons/SPHover/` (their `.toc` and `.lua` as
+The device app carries the addons, `addons/SPMovie/`, `addons/SPHover/`, and `addons/SPTouchBars/` (their `.toc`, `.lua`, and SPTouchBars’ original `.tga` artwork as
 `addon/` has them; `apps/client/build.sh` and the companion's `ClientAssembly` both bundle them, on both
 platforms). Before each start, once the game is picked, the launcher puts them in the game's
 `Interface/AddOns/` (`sp_addons_place` in `spcdn.m`): SPMovie on every device, SPHover on the headset only
-(the iPad and iPhone have a real pointer), each file written when the game's copy is missing or its bytes
-differ (`addons: N up to date, wrote …`). Each TOC lists every flavor's Interface number, so one copy
-suits each game. The companion used to copy them with the game files; it doesn't any more, and a changed
+(the iPad and iPhone have a real pointer), and SPTouchBars for Forever on either platform. The selected
+flavor is passed explicitly, so Forever's touch bars aren't installed into the other games. Each file is
+written when the game's copy is missing or its bytes differ (`addons: N up to date, wrote …`). SPMovie
+and SPHover list every flavor's Interface number; SPTouchBars lists Forever's only, checked against
+`flavors.plist` by `FlavorTests`. Updates only touch bundled addon files and artwork, leaving layouts in
+WoW's saved variables and the player's AddOns enable/disable choice alone. The release device kit
+bundles the same addons as the companion and script builds. The companion used to copy addons with
+the game files; it doesn't any more, and a changed
 addon reaches a device with the rebuild the companion's resources digest asks for (`ClientBuild`).
+
+Bagnon is downloaded separately from its publisher on the first game launch (`sp_bagnon_place` in
+`spaddons.m`), rather than redistributed in the app. CurseForge file 9546609 (12.1.9) supports all five
+flavors. Its URL and SHA-256 are pinned together in the installer. The ZIP is cached in
+`Library/spaddons/`, checked before each use, and unpacked into the selected game's `Interface/AddOns/`,
+including BagBrother, Bagnon, Bagnon_Bank, Bagnon_Config, and Bagnon_GuildBank. A cached package repairs
+missing or changed files offline without rewriting identical files or touching WTF or addon enablement.
+ZIP paths, sizes, CRCs, and the required TOCs are checked before files are installed. Download failures
+are logged, let the game start, and retry next launch. `AddonDownloadTests` uses made-up packages to
+check caching, repair, saved settings, and rejected archives.
 
 What the device holds for it, all in the app's container:
 
@@ -962,23 +984,42 @@ window and view coordinates are the same AppKit points. `-[NSView setLayer:]` pu
   outside the window and reaches no one, as beside a Mac window. An iPad and the headset keep the
   whole window.
 
-- **Screen.** The client reads the display once at startup and caps its drawable at the display
-  mode's pixel size. On visionOS the shim reports a fixed screen at least as big as any window
-  (2560x1440 pt); on iPad, the real screen, landscape. CoreGraphics reports one display with the same
-  size.
+- **Screen.** The client caps its drawable at the display mode's pixel size. The virtual display
+  covers the device screen and every supported render mode, so starting at the lower-power default
+  does not prevent selecting full detail later. Its point size is that pixel ceiling divided by the default
+  backing scale. Screen geometry and density remain stable while the window's render scale changes:
+  otherwise WoW's desktop-sized request is smaller than the next advertised mode. The baseline on
+  visionOS is 2560×1440 pt; on iPad it follows the window's orientation.
+  CoreGraphics advertises one display with the default, lower-power, fixed, and full-detail modes, using whole, even pixels
+  and the window's aspect ratio. Mode objects snapshot both point and pixel sizes.
 - **Scene tracking.** The client's event pump calls `sp_window_track_scene`. At first and after every
   scene resize it sets the window, content view and layer frames, then posts the resize notifications
   and delegate calls AppKit would after a live resize. The client responds by resizing its drawable.
   The layer is put back whenever it doesn't fill the game rect (the client sometimes makes a new
   full-screen layer after a reactivation, and moves its layer to its view's origin on the first
-  resize), and an old layer is removed when the client sets a new one.
+  resize), and an old layer is removed when the client sets a new one. Display or scale changes send
+  CoreGraphics reconfiguration callbacks and AppKit screen/backing notifications before the resize,
+  so rotating from landscape to portrait refreshes the client's drawable ceiling. Requests issued
+  while handling those notifications cannot accidentally select Native again.
 - **Render scale.** The backing scale: 1 renders a drawable the size of the window in points, 2 a
-  Retina-sized one. 1x cuts GPU time sharply; see Heat below. The device owns it: the start screen's
-  Settings > Display (Automatic, 1x, or 2x, in the app's `NSUserDefaults` as `sp_scale`) applies to
-  every launch, from the companion or the home screen. `SP_SCALE` (`run.sh`) is a dev override that
-  wins over it. Automatic is 2 on an iPhone (see iPhone, under iPad) and 1 elsewhere. The AppKit shim
-  works it out once (`sp_backing_scale`), and the launcher's first-run 50% render scale on an iPhone
-  asks the shim, so the precedence lives in one place.
+  Retina-sized one. 1x cuts GPU time sharply; see Heat below. Automatic is 2 on an iPhone and 1
+  elsewhere. Existing `sp_scale` preferences remain the legacy default, with `SP_SCALE` as a developer
+  override. Normal users select resolutions in WoW. `sp_resolution_catalog` always supplies the default
+  (ID 0), lower power (ID 2, one pixel per point), 1920, 2560, and full screen detail (ID 1, UIKit screen
+  scale; 2 on visionOS). Identical pixel sizes are deduplicated. Fixed modes preserve aspect ratio with
+  even pixels; full detail follows the window and screen density. The last active mode is `sp_resolution`;
+  older availability switches are ignored. Invalid IDs fall back to the default. A developer override
+  temporarily suppresses other choices without destroying the saved game selection.
+  `CGDisplaySetDisplayMode`, an advertised-size window request, or an advertised-size drawable request
+  selects a mode. Window requests are in points: convert with the pre-change window scale before
+  matching pixels (2560×1920 is requested as about 1821.33×1366 pt while the 1920 preset is active).
+  Direct pixel-sized requests remain a compatibility fallback. The AppKit shim observes
+  `CAMetalLayer.setDrawableSize:` only on the game's layer
+  for clients that change fullscreen-windowed resolution without switching the physical display.
+  A positive, finite `SP_SCALE` fixes the default scale and suppresses extra modes for developer runs.
+  The launcher's first-run 50% render scale on an iPhone asks `sp_backing_scale`, so that default shares
+  the same effective scale. An iPad's Info.plist explicitly permits both portrait and landscape
+  orientations in the companion and script assembly paths.
 
 ## Input
 
@@ -994,6 +1035,22 @@ and scroll events and `NSTextInputClient`), with no event taps. `spevent.m`:
   to Mac key code, AppKit function-key characters, device-dependent modifier bits; modifier keys
   become `flagsChanged`). Key repeat is synthesized, since UIKit doesn't repeat. `interpretKeyEvents:`
   sends text to `insertText:replacementRange:` and editing keys to `doCommandBySelector:`.
+- **On-screen keys (iPhone and iPad).** `spkeys.m`, included by `spevent.m`, supplies optional Ctrl,
+  Shift, Alt, and Space controls. Settings > Controls > Keyboard Buttons toggles each independently, all off by
+  default (`sp_ctrl_enabled`, `sp_shift_enabled`, `sp_alt_enabled`, and `sp_space_enabled`). Each owns
+  its touch outside the game's mouse/chord path, sends a normal keyboard press and release, and saves
+  its normalized position as `sp_<name>_position`. `sp_keyboard_size` shares a 44–152-point face size,
+  default 76. Modifier squares drag like R. Space's circular move ring adds 52 points to its face size
+  and reuses `SPJoystickHandle` through `SPMovableControl`: two seconds with progress feedback,
+  gold on unlock, early movement cancels, and lifting relocks. The whole visible Space circle owns one
+  touch, pressing Space immediately and forwarding that touch to the noninteractive ring's hold state
+  machine. Unlocking releases Space and repeat before relocation; the touch remains owned until lift.
+  A 52-point shield absorbs stray finger contacts around the circle while passing pointer and Pencil
+  input through its margin. R and modifier squares sit above the shield. Resizing, disabling, detaching,
+  or deactivation cancels held keys and pending move timers. The keyboard path unions separate hardware
+  and touch key sets, so releasing
+  one source cannot release a key still held by the other. Modifiers emit `flagsChanged`, Space uses
+  normal key events and repeat, and event-touch inspection settles simultaneous modifier/game delivery.
 - **Pointer and touch.** Touches and pinches become left clicks and drags, a secondary-button mask a
   right click; hover becomes mouse moves; a scroll pan becomes precise `scrollWheel:`. Each change in
   a pointer touch's button mask is a press or release, and GameController's `GCMouse` reports buttons
@@ -1001,8 +1058,48 @@ and scroll events and `NSTextInputClient`), with no event taps. `spevent.m`:
 - **Finger chords (iPhone and iPad).** Fingers that land within `SP_CHORD_MS` (50 ms) of each other
   press one button: one left, two right, three middle, held while they're down, so a two-finger drag is
   mouselook. No button goes down until the window closes (a press can't be taken back), so a left click
-  waits out the window. The press is at the leftmost finger, or the rightmost with Settings > Touch.
+  waits out the window. The press is at the leftmost finger, or the rightmost with Settings > Controls.
   With Accessibility Zoom on, iOS holds three-finger touches about half a second before the app gets them.
+- **Thumb modifier (iPhone and iPad).** `spthumb.m`, included by `spevent.m`, draws a resizable R
+  square above the game. Its touch belongs to its own UIKit control, never to the game's mouse or
+  finger chords. Holding it latches a new game finger or Apple Pencil touch to the right button until
+  it lifts; the square alone emits no mouse event. The event's active touches settle simultaneous
+  delivery order. Moving the square at least 10 points repositions it inside the game and safe area;
+  `sp_thumb_position` stores normalized coordinates. `sp_thumb_size` stores its width (44–152 points,
+  default 76); the label scales with it, and small windows shrink it without changing the saved size.
+  `sp_thumb_enabled` defaults on and Settings > Controls > Right-click Button changes its layout.
+  Cancellation and scene deactivation clear held input.
+- **Virtual left stick (iPhone and iPad).** `spjoystick.m`, also included by `spevent.m`, owns a separate
+  UIKit touch and a hidden `GCVirtualController` configured with only `GCInputLeftThumbstick`. The
+  client's existing native GameController imports see its connection and analog axes; no mouse or
+  keyboard events are synthesized. Touch displacement has a radial 12% dead zone, rescales the remaining
+  travel to 0–1, clamps diagonals to the unit circle, and flips UIKit Y to controller Y. A separate
+  44-point handle repositions the control after a two-second stationary hold, while leaving the axes
+  neutral. A filling border shows progress, and the handle turns gold when unlocked. Before unlocking,
+  movement beyond 12 points cancels the candidate. Releasing, resizing, or app switching invalidates
+  its pending main-queue timer; a generation counter prevents stale callbacks from unlocking it later.
+  Lifting relocks it, and the drag starts at the thumb's position at unlock so slight drift never makes
+  the control jump. `sp_joystick_position` saves
+  normalized coordinates, `sp_joystick_size` saves a 100–260-point diameter (default 156), and
+  `sp_joystick_enabled` defaults on. Settings > Controls > Joystick changes these. Touch cancellation, layout
+  changes, disabling, detaching, and scene deactivation clear movement. Deactivation disconnects the
+  virtual controller; foreground activation reconnects at neutral. An asynchronous connection that
+  completes after disabling is disconnected rather than revived. A failed connection shows `!` and
+  can be retried by touching the stick again. Game-side controller support still decides movement behavior.
+  A transparent `SPJoystickShield` absorbs contacts starting within 52 points outside the circular
+  stick (about one centimeter on a full-size iPad), independent of the selected stick size. Its hit
+  testing extends outside the control's bounds. A margin contact remains owned by the shield until
+  it lifts, never forwarding to the game's responder or becoming joystick movement. Pointer and hover
+  events pass through the margin; R has precedence where its target overlaps. `sploading.m` posts
+  `SPGameFirstFrame` on the main queue once the first present is seen; this permits connection but
+  does not start it. The first actual stick touch requests the controller, since menus may render
+  before WoW's controller listeners are ready. A touch still held when connection completes supplies
+  its current axes; one lifted or cancelled during connection remains neutral. Subsequent foreground
+  activation and re-enabling reconnect as before. Loading-screen drills keep the first-frame signal,
+  and `SP_HOVER_OFF` has a first-stick-touch fallback because it disables present hooks. Readiness is
+  also retained in `sp_game_presented`, so a late input view cannot miss the one-shot event. A new
+  direct touch in a foreground-active scene clears stale suspension if its activation notification
+  was missed; old moved touches and touches in inactive scenes cannot use that recovery path.
 - **Mouselook.** The client hides the cursor, dissociates it from the mouse and reads drag deltas. The
   CoreGraphics shim's cursor calls go to the AppKit shim; while dissociated, deltas come from
   `GCMouse`'s raw movement and the position stays put. iPadOS honours pointer lock, so it's on by

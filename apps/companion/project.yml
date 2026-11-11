@@ -154,6 +154,7 @@ targets:
       - ../client/spassemble.m
       - ../client/spbind.m
       - ../client/spcdn.m
+      - ../client/spaddons.m
       - ../client/spsign.m
       - ../client/spzsign.cpp
       - path: ../client/flavors.plist

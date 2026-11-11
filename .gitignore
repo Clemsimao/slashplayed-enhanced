@@ -9,5 +9,6 @@ apps/companion/Generated/
 .DS_Store
 config/local.env
 build/
+/outputs/
 .claude
 apps/companion-rs/target/
