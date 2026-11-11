@@ -2,6 +2,12 @@
 
 **World of Warcraft on iPad, with touch controls shaped by real play.**
 
+<p align="center">
+  <img src="docs/media/ipad-gameplay.gif" width="720" alt="Real iPad gameplay showing the touch joystick, circular action buttons, targeting, and combat with two character layouts">
+  <br>
+  <sub>Real iPad gameplay: two short combat excerpts with the on-screen touch controls. Guild chat is blurred.</sub>
+</p>
+
 Slashplayed Enhanced is a hands-on, polish-focused fork of
 [Slashplayed by Paul Straw / Straw Dynamics](https://github.com/paulstraw/slashplayed).
 It builds on that project's native Apple Silicon compatibility layer, with a focus on how the
@@ -30,6 +36,18 @@ The native input and settings improvements target iPad and iPhone. **SPTouchBars
 the other game clients retain their existing action bars. The foundation still supports Apple
 Vision Pro. See the [player guide](docs/guide.md) and [touch-bar guide](addon/SPTouchBars/README.md)
 for controls and configuration.
+
+<details>
+<summary><strong>See the touch-bar editor in action</strong></summary>
+
+<p align="center">
+  <img src="docs/media/touch-layout-editor.gif" width="800" alt="The native touch-bar inspector switching between utility and control settings, with selected controls highlighted in the game">
+</p>
+
+A short iPad recording of the native inspector and its selection feedback. The view is cropped to
+keep the editor and action buttons visible; guild chat is blurred.
+
+</details>
 
 ## Project status
 
