@@ -49,6 +49,31 @@ keep the editor and action buttons visible; guild chat is blurred.
 
 </details>
 
+<details>
+<summary><strong>Accept and turn in quests with Interact</strong></summary>
+
+<p align="center">
+  <img src="docs/media/npc-quest-interaction.gif" width="800" alt="Real iPad gameplay turning in a quest and accepting the next one with the Interact button">
+</p>
+
+Interact advances the NPC conversation one press at a time, including quest acceptance and
+turn-in. Quests with a choice of rewards wait for you to select one manually before confirming.
+Gameplay chat is blurred.
+
+</details>
+
+<details>
+<summary><strong>Explore the enhanced settings interface</strong></summary>
+
+<p align="center">
+  <img src="docs/media/enhanced-settings.gif" width="760" alt="The enhanced iPad settings sidebar and keyboard-button controls, including individual toggles and button sizing">
+</p>
+
+The native settings sidebar keeps categories within reach. Keyboard controls have individual
+toggles and a shared size slider, with instructions visible alongside the controls.
+
+</details>
+
 ## Project status
 
 This is active development, shaped by hands-on iPad play and automated addon, input, display, and
