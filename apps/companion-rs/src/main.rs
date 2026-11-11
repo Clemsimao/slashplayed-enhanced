@@ -1,15 +1,16 @@
 // slashplayed-companion: sets up Slashplayed on an iPad or iPhone from Windows, Linux, or a Mac, with no Xcode
 // and no Mac companion (docs/setup-without-a-mac.md; how it works: docs/architecture.md, "The host tool").
-// Run it again to re-sign: weekly on a free Apple ID, yearly on a paid one. Each run:
+// Run it again to re-sign when the app can't renew its own profiles (its start screen says so). Each run:
 //
 //   1. the device kit (the device app, unsigned: kit.rs), downloaded and checked, before anything else;
 //   2. the device over USB: trusted by this computer, Developer Mode on (device.rs);
 //   3. the Apple ID sign-in, held in memory only, and the team (account.rs);
 //   4. the device, App IDs, capabilities, certificate, and profiles (provision.rs);
 //   5. the app signed with zsign (sign.rs) and installed over USB;
-//   6. the RemotePairing record and the developer disk image (ddi.rs) into its container, for the JIT helper.
+//   6. the RemotePairing record and the developer disk image (ddi.rs) into its container, for the JIT helper,
+//      and the Apple token, for the app to renew its own profiles (apps/client/spapple.m).
 //
-// The device does the rest: it installs and updates games itself, with no credential on it (it loads each
+// The device does the rest: it installs and updates games itself, with no signing credential on it (it loads each
 // game's unchanged client with spguest, so nothing there is signed), and picks their region (PR #35, #41),
 // so this never writes .build.info, a region, or addons. Vision Pro stays Mac-only.
 
@@ -55,7 +56,8 @@ Options for install:
   --revoke-oldest       with no credential store, at the team's certificate limit: revoke the oldest
                         certificate a Slashplayed tool made, even another computer's
 
-Run it again to re-sign: within 7 days on a free Apple ID, within a year on a paid one.
+Slashplayed renews its own signing on the device when a game starts near its end. Run this again if
+its start screen says it can't.
 Your Apple ID password is used once for the sign-in and never stored.";
 
 struct Args {
@@ -171,7 +173,7 @@ async fn install(args: &Args) -> Result<(), Report> {
     }
     let anisette = args.opt("--anisette").unwrap_or(account::DEFAULT_ANISETTE);
     say(&format!("signing in, with anisette from {anisette}"));
-    let mut session = account::sign_in(&apple_id, anisette, args.flag("--server-client-info")).await?;
+    let (mut session, device_token) = account::sign_in(&apple_id, anisette, args.flag("--server-client-info")).await?;
     let team = provision::pick_team(&mut session, args.opt("--team")).await?;
     say(&format!("team {} ({})", team.name.as_deref().unwrap_or("?"), team.team_id));
     let bundle_id = args.opt("--bundle-id").map(str::to_string).unwrap_or_else(|| format!("{}.slashplayed", team.team_id));
@@ -229,13 +231,29 @@ async fn install(args: &Args) -> Result<(), Report> {
     if !ddi::send_if_needed(&mut afc).await? {
         say("the app already has this developer disk image");
     }
+    // The Apple token: with it the app gets its own renewed profiles from Apple (apps/client/spapple.m),
+    // so it keeps opening with no computer. The launcher imports it into its keychain and deletes the file.
+    let renews = device_token.is_some();
+    match device_token {
+        Some(t) => {
+            device::put(&mut afc, "Library/spappletoken.json", &t).await?;
+            drop(t);
+            say("sent the Apple token, for the app to renew its own profiles");
+        }
+        None => say("no Apple token sent (--server-client-info): the app can't renew its own profiles"),
+    }
 
     eprintln!();
     eprintln!("Slashplayed is on {}.", d.name);
     if free {
         eprintln!(
-            "It's signed with a free Apple ID: the first time, trust it in Settings > General > VPN & Device Management. Run this again within 7 days, or the app stops opening."
+            "It's signed with a free Apple ID: the first time, trust it in Settings > General > VPN & Device Management."
         );
+        if renews {
+            eprintln!("Its signing lasts 7 days. It renews itself when a game starts in the last 3; if it can't, its start screen says so, and running this again fixes it.");
+        } else {
+            eprintln!("Run this again within 7 days, or the app stops opening.");
+        }
     }
     eprintln!("Open Slashplayed and tap a game to install it on the device.");
     Ok(())

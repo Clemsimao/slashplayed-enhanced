@@ -54,6 +54,29 @@ static void say(NSString *s) {
 
 void sp_launch_say(NSString *s) { say(s); }  // spjit.m, sppair.m, and spvpn.m log through it
 NSString *sp_jit_attach(void (^pump)(double));  // spjit.m
+NSArray<NSDictionary *> *sp_jit_profiles(NSArray<NSData *> *install, void (^pump)(double), NSString **problem);  // spjit.m
+NSString *sp_apple_token_import(void);  // spapple.m
+NSString *sp_apple_token_describe(void);  // spapple.m
+
+void sp_profiles_renew(void (^pump)(double));  // spapple.m
+
+// The profiles drill ($SP_PROFILES_DRILL, run.sh): before the helper attaches, installs every
+// Documents/spprofiles/*.mobileprovision through the helper's misagent (sp_jit_profiles), or with none there
+// only lists this app's profiles. (Renewing from Apple is sp_profiles_renew, every launch: SP_RENEW=now.)
+static NSString *profiles_drill(void (^pump)(double)) {
+    NSMutableArray<NSData *> *install = [NSMutableArray array];
+    NSString *dir = [NSHomeDirectory() stringByAppendingPathComponent:@"Documents/spprofiles"];
+    for (NSString *name in [NSFileManager.defaultManager contentsOfDirectoryAtPath:dir error:nil]) {
+        if (![name.pathExtension isEqual:@"mobileprovision"]) continue;
+        NSData *d = [NSData dataWithContentsOfFile:[dir stringByAppendingPathComponent:name]];
+        if (d) [install addObject:d];
+    }
+    say([NSString stringWithFormat:@"profiles drill: %lu to install", (unsigned long)install.count]);
+    NSString *problem = nil;
+    NSArray *mine = sp_jit_profiles(install, pump, &problem);
+    if (mine) say([NSString stringWithFormat:@"profiles drill: %lu of this app's on the device", (unsigned long)mine.count]);
+    return problem;
+}
 NSString *sp_device_noun(void);  // spjit.m
 NSString *sp_guest_hooks_problem(void);  // spguestlaunch.m
 NSString *sp_guest_preflight(NSString *path);  // spguestlaunch.m
@@ -634,6 +657,9 @@ int main(int argc, char **argv) {
     delete_listed();
     write_free_space();
     forget_identity();
+    NSString *appleToken = sp_apple_token_import();
+    if (appleToken) say(appleToken);
+    say(sp_apple_token_describe());
     NSString *dir = NSBundle.mainBundle.bundlePath;
     // The games: every one flavors.plist lists, in its order (the start screen's, and its first is the
     // default); the ones the device has nothing of read as installable (sp_games). A client in Library/spgames
@@ -747,6 +773,10 @@ int main(int argc, char **argv) {
     NSString *problem = sp_guest_preflight(library);
     if (!problem) problem = copy_unfinished();
     NSMutableData *login = problem ? nil : sp_login_prepare(token, &pump, &problem);
+    if (!problem && NSProcessInfo.processInfo.environment[@"SP_PROFILES_DRILL"].length) problem = profiles_drill(pump);
+    // The app's own profiles, renewed from Apple when they're near their end (spapple.m): after the sign-in and
+    // before the attach, since the helper installs them through the same tunnel. It never stops the launch.
+    if (!problem) sp_profiles_renew(pump);
     if (!problem) problem = sp_jit_attach(pump);
     if (problem) fail_launch(problem);
     if (login) sp_login_write(flavor, login);  // on failure it says so; the token or the game's login screen is left
