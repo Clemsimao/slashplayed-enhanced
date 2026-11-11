@@ -2,10 +2,11 @@
 // (gen_stubs.py EXTRA_INCLUDES); a function here with __asm__("_symbol") replaces its stub.
 //
 // There's one display, 1 (NSScreenNumber in the AppKit shim), and it's the AppKit shim's NSScreen,
-// scale 1 ($SP_SCALE). The client caps its drawable at the display mode's pixel size; with no display
+// with its chosen backing scale. The client caps its drawable at the display mode's pixel size; with no display
 // (the stubs returned 0 and NULL) it capped at 1920x1080.
 #include <CoreGraphics/CoreGraphics.h>
 #include <objc/message.h>
+#include "../appkit/spdisplaygeometry.h"
 
 static const uint32_t sp_display = 1;
 
@@ -32,10 +33,11 @@ __attribute__((noinline)) static void sp_display_log(const char *fn, uint32_t di
     sp_stub_log(buf);
 }
 
-// A display mode: its size in points, captured when it was made, and the scale.
+// Snapshot both point and pixel sizes: a scene resize can change a fixed preset's backing scale.
 @interface SPDisplayMode : NSObject {
   @public
-    CGSize size;
+    CGSize size, pixels;
+    NSInteger resolution;  // preset to select/restore, even when pixels describe the virtual ceiling
 }
 @end
 @implementation SPDisplayMode
@@ -44,7 +46,52 @@ __attribute__((noinline)) static void sp_display_log(const char *fn, uint32_t di
 static SPDisplayMode *sp_mode_now(void) {
     SPDisplayMode *m = [[SPDisplayMode alloc] init];
     m->size = sp_display_size();
+    m->pixels = sp_resolution_pixels(m->size, sp_display_scale(), NO);
+    m->pixels.width = round(m->pixels.width);
+    m->pixels.height = round(m->pixels.height);
+    id screen = ((id (*)(id, SEL))objc_msgSend)((id)NSClassFromString(@"NSScreen"), sel_registerName("mainScreen"));
+    SEL selector = sel_registerName("sp_selectedResolution");
+    m->resolution = [screen respondsToSelector:selector] ? ((NSInteger (*)(id, SEL))objc_msgSend)(screen, selector) : 0;
     return m;
+}
+
+// These are macOS CoreGraphics types/flags, absent from the iOS and visionOS headers. Keep observers
+// on the main thread, where the client registers them and the AppKit shim tracks the scene.
+typedef void (*SPDisplayCallback)(uint32_t display, uint32_t flags, void *context);
+@interface SPDisplayObserver : NSObject
+@property(nonatomic) SPDisplayCallback callback;
+@property(nonatomic) void *context;
+@end
+@implementation SPDisplayObserver
+@end
+static NSMutableArray<SPDisplayObserver *> *sp_display_observers;
+
+int32_t sp_CGDisplayRegisterReconfigurationCallback(SPDisplayCallback callback, void *context) __asm__("_CGDisplayRegisterReconfigurationCallback");
+int32_t sp_CGDisplayRegisterReconfigurationCallback(SPDisplayCallback callback, void *context) {
+    if (!callback) return 1001;  // kCGErrorIllegalArgument
+    if (!sp_display_observers) sp_display_observers = [NSMutableArray array];
+    for (SPDisplayObserver *o in sp_display_observers)
+        if (o.callback == callback && o.context == context) return 0;
+    SPDisplayObserver *o = [SPDisplayObserver new];
+    o.callback = callback; o.context = context;
+    [sp_display_observers addObject:o];
+    return 0;
+}
+
+int32_t sp_CGDisplayRemoveReconfigurationCallback(SPDisplayCallback callback, void *context) __asm__("_CGDisplayRemoveReconfigurationCallback");
+int32_t sp_CGDisplayRemoveReconfigurationCallback(SPDisplayCallback callback, void *context) {
+    for (SPDisplayObserver *o in [sp_display_observers copy])
+        if (o.callback == callback && o.context == context) [sp_display_observers removeObjectIdenticalTo:o];
+    return 0;
+}
+
+// AppKit calls this when portrait/landscape changes the display, or a fixed preset changes scale.
+// Snapshot observers so callbacks can remove themselves without mutating an enumeration.
+__attribute__((visibility("default"))) void sp_display_reconfigured(void) {
+    NSArray<SPDisplayObserver *> *observers = [sp_display_observers copy];
+    for (SPDisplayObserver *o in observers) o.callback(sp_display, 1 << 0, o.context);
+    for (SPDisplayObserver *o in [sp_display_observers copy])
+        o.callback(sp_display, (1 << 3) | (1 << 12), o.context);
 }
 
 uint32_t sp_CGMainDisplayID(void) __asm__("_CGMainDisplayID");
@@ -88,7 +135,32 @@ CFTypeRef sp_CGDisplayCopyDisplayMode(uint32_t display) {
 CFArrayRef sp_CGDisplayCopyAllDisplayModes(uint32_t display, CFDictionaryRef options) __asm__("_CGDisplayCopyAllDisplayModes");
 CFArrayRef sp_CGDisplayCopyAllDisplayModes(uint32_t display, CFDictionaryRef options) {
     sp_display_log("CGDisplayCopyAllDisplayModes", display);
-    return display == sp_display ? CFBridgingRetain(@[ sp_mode_now() ]) : NULL;
+    if (display != sp_display) return NULL;
+    id screen = ((id (*)(id, SEL))objc_msgSend)((id)NSClassFromString(@"NSScreen"), sel_registerName("mainScreen"));
+    SEL selector = sel_registerName("sp_displayModes");
+    if (![screen respondsToSelector:selector]) return CFBridgingRetain(@[sp_mode_now()]);
+    NSArray *available = ((id (*)(id, SEL))objc_msgSend)(screen, selector);
+    NSMutableArray *modes = [NSMutableArray array];
+    for (NSDictionary *entry in available) {
+        SPDisplayMode *m = [SPDisplayMode new];
+        // These modes are render resolutions, with one logical pixel per mode pixel. The window's
+        // backing scale independently maps that resolution to the physical UIKit window.
+        [entry[@"Pixels"] getValue:&m->pixels size:sizeof(m->pixels)];
+        m->size = m->pixels;
+        m->resolution = [entry[@"Resolution"] integerValue];
+        [modes addObject:m];
+    }
+    return CFBridgingRetain(modes);
+}
+
+int32_t sp_CGDisplaySetDisplayMode(uint32_t display, CFTypeRef mode, CFDictionaryRef options) __asm__("_CGDisplaySetDisplayMode");
+int32_t sp_CGDisplaySetDisplayMode(uint32_t display, CFTypeRef mode, CFDictionaryRef options) {
+    SPDisplayMode *m = (__bridge SPDisplayMode *)mode;
+    if (display != sp_display || ![m isKindOfClass:SPDisplayMode.class] || m->resolution < 0) return 1001;
+    id screen = ((id (*)(id, SEL))objc_msgSend)((id)NSClassFromString(@"NSScreen"), sel_registerName("mainScreen"));
+    SEL selector = sel_registerName("sp_selectResolution:");
+    if (![screen respondsToSelector:selector]) return 1001;
+    return ((BOOL (*)(id, SEL, NSInteger))objc_msgSend)(screen, selector, m->resolution) ? 0 : 1001;
 }
 
 void sp_CGDisplayModeRelease(CFTypeRef mode) __asm__("_CGDisplayModeRelease");
@@ -106,11 +178,11 @@ size_t sp_CGDisplayModeGetHeight(SPDisplayMode *m) {
 }
 size_t sp_CGDisplayModeGetPixelWidth(SPDisplayMode *m) __asm__("_CGDisplayModeGetPixelWidth");
 size_t sp_CGDisplayModeGetPixelWidth(SPDisplayMode *m) {
-    return m ? (size_t)(m->size.width * sp_display_scale()) : 0;
+    return m ? (size_t)m->pixels.width : 0;
 }
 size_t sp_CGDisplayModeGetPixelHeight(SPDisplayMode *m) __asm__("_CGDisplayModeGetPixelHeight");
 size_t sp_CGDisplayModeGetPixelHeight(SPDisplayMode *m) {
-    return m ? (size_t)(m->size.height * sp_display_scale()) : 0;
+    return m ? (size_t)m->pixels.height : 0;
 }
 // The client already presents at about 60 fps; keep telling it 60 until that's looked at.
 double sp_CGDisplayModeGetRefreshRate(SPDisplayMode *m) __asm__("_CGDisplayModeGetRefreshRate");

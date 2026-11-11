@@ -153,6 +153,7 @@ targets:
       # its thread-local trampoline it links, are guesttest's to run).
       - ../client/spguest.c
       - ../client/spguest_tlv.S
+      - ../client/spaddons.m
       - path: ../client/flavors.plist
         buildPhase: resources
     settings:

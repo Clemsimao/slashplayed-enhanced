@@ -2,5 +2,6 @@
 // bind check, against the companion's BlizzardCDN and BindCheck, and its client's checks (sp_slice_problem).
 #import "../../client/spbind.h"
 #import "../../client/spcdn.h"
+#import "../../client/spaddons.h"
 // The start screen's logo paths (spstartscreen.swift draws them), which StartScreenLogoTests checks against the app icon.
 #import "../../client/splogo.h"

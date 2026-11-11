@@ -19,9 +19,8 @@ import UIKit
 
 private func say(_ s: String) { sp_launch_say("start: " + s) }
 
-// Display > Scale's key, read by the AppKit shim (spwindow.m's sp_scale_now, which has the same literal).
+// Legacy scale preference, retained for existing defaults and developer drills. Normal selection is in WoW.
 private let scaleKey = "sp_scale"
-
 // 0 (Automatic: removes the key), 1, or 2. It applies from the next game started, from here or the home
 // screen: the shim reads it after $SP_SCALE (run.sh's dev override), and through it the launcher's 50%
 // render-scale seed on an iPhone.
@@ -34,6 +33,27 @@ private func setScale(_ scale: Int) {
 // Touch > Click With's key, read by the AppKit shim (spevent.m's sp_chord_resolve, which has the same
 // literal): whether a two- or three-finger press clicks where the rightmost finger is, not the leftmost.
 private let chordRightFingerKey = "sp_chord_right_finger"
+// spevent.m's thumb overlay defaults on in this build. Its normalized position is kept on this device.
+private let thumbEnabledKey = "sp_thumb_enabled"
+private let thumbPositionKey = "sp_thumb_position"
+// spthumb.m uses the same point sizes; the slider presents them relative to the larger default.
+private let thumbSizeKey = "sp_thumb_size"
+private let thumbDefaultSize = 76.0
+private let thumbSizeRange = 44.0...152.0
+// One placement lock for R, Ctrl, Shift, and Alt; key/right-click behavior is independent of layout.
+private let buttonPositionsLockedKey = "sp_button_positions_locked"
+// spjoystick.m exposes only a virtual controller's left stick, with its own saved geometry.
+private let joystickEnabledKey = "sp_joystick_enabled"
+private let joystickPositionKey = "sp_joystick_position"
+private let joystickSizeKey = "sp_joystick_size"
+private let joystickDefaultSize = 156.0
+private let joystickSizeRange = 100.0...260.0
+// Optional keyboard overlays use the same literals and size limits as spkeys.m.
+private let keyboardButtons = [(name: "ctrl", label: "Ctrl"), (name: "shift", label: "Shift"),
+                               (name: "alt", label: "Alt"), (name: "space", label: "Space")]
+private let keyboardSizeKey = "sp_keyboard_size"
+private let keyboardDefaultSize = 76.0
+private let keyboardSizeRange = 44.0...152.0
 
 private func setChordRightFinger(_ right: Bool) {
     if right { UserDefaults.standard.set(true, forKey: chordRightFingerKey) }
@@ -60,8 +80,31 @@ struct License: Hashable {
     }
 }
 
-// What the sheet's pages are: the list of licenses, or one license's text.
-enum Page: Hashable { case acknowledgements, license(License) }
+enum SettingsCategory: String, CaseIterable, Identifiable {
+    case controls, display, games, account, about
+    var id: Self { self }
+    var title: String { rawValue.capitalized }
+    var icon: String {
+        switch self {
+        case .controls: "gamecontroller"
+        case .display: "display"
+        case .games: "square.grid.2x2"
+        case .account: "person.crop.circle"
+        case .about: "info.circle"
+        }
+    }
+    static var available: [Self] {
+        #if os(visionOS)
+        [.display, .games, .account, .about]
+        #else
+        allCases
+        #endif
+    }
+}
+
+enum Page: Hashable {
+    case joystick, rightClick, keyboard, game(String), acknowledgements, license(License)
+}
 
 // The confirmations, each with Cancel as its default.
 enum Confirmation: Identifiable {
@@ -89,6 +132,13 @@ struct Snapshot {
     var signedUntil: Date?  // when the app stops opening, unless it's renewed (sp_profile_expiry)
     var scale = 0
     var chordRightFinger = false
+    var thumbEnabled = true
+    var thumbSize = thumbDefaultSize
+    var joystickEnabled = true
+    var joystickSize = joystickDefaultSize
+    var keyboardEnabled: Set<String> = []
+    var keyboardSize = keyboardDefaultSize
+    var buttonPositionsLocked = false
     var games: [Game] = []
     var version = "Unknown"
 }
@@ -98,9 +148,9 @@ final class Settings: ObservableObject {
     @Published var now = Snapshot()
     @Published var email: String?  // while shown; nil hides it
     @Published var path: [Page] = []
+    @Published var category: SettingsCategory? = SettingsCategory.available.first
     @Published var confirmation: Confirmation?
     weak var host: UIViewController?
-    var scrollTo: ((String) -> Void)?  // set by the list once it's up
     var drill: String?
 
     // The sheet that's up, for sp_settings_hide_email.
@@ -127,6 +177,16 @@ final class Settings: ObservableObject {
         let scale = UserDefaults.standard.integer(forKey: scaleKey)
         s.scale = scale == 1 || scale == 2 ? scale : 0
         s.chordRightFinger = UserDefaults.standard.bool(forKey: chordRightFingerKey)
+        s.thumbEnabled = UserDefaults.standard.object(forKey: thumbEnabledKey) as? Bool ?? true
+        s.buttonPositionsLocked = UserDefaults.standard.bool(forKey: buttonPositionsLockedKey)
+        let thumbSize = (UserDefaults.standard.object(forKey: thumbSizeKey) as? NSNumber)?.doubleValue ?? thumbDefaultSize
+        s.thumbSize = thumbSize.isFinite ? min(thumbSizeRange.upperBound, max(thumbSizeRange.lowerBound, thumbSize)) : thumbDefaultSize
+        s.joystickEnabled = UserDefaults.standard.object(forKey: joystickEnabledKey) as? Bool ?? true
+        let joystickSize = (UserDefaults.standard.object(forKey: joystickSizeKey) as? NSNumber)?.doubleValue ?? joystickDefaultSize
+        s.joystickSize = joystickSize.isFinite ? min(joystickSizeRange.upperBound, max(joystickSizeRange.lowerBound, joystickSize)) : joystickDefaultSize
+        s.keyboardEnabled = Set(keyboardButtons.filter { UserDefaults.standard.bool(forKey: "sp_\($0.name)_enabled") }.map(\.name))
+        let keyboardSize = (UserDefaults.standard.object(forKey: keyboardSizeKey) as? NSNumber)?.doubleValue ?? keyboardDefaultSize
+        s.keyboardSize = keyboardSize.isFinite ? min(keyboardSizeRange.upperBound, max(keyboardSizeRange.lowerBound, keyboardSize)) : keyboardDefaultSize
         s.games = flavors.map { flavor in
             var source: NSString?
             let version = sp_game_build(flavor, &source)?["Version"]
@@ -187,14 +247,15 @@ final class Settings: ObservableObject {
     }
 
     // Pages the drill opens open without animating.
-    private func push(_ pages: [Page]) {
+    private func push(_ category: SettingsCategory, _ pages: [Page] = []) {
         var t = Transaction()
         t.disablesAnimations = true
-        withTransaction(t) { path = pages }
+        withTransaction(t) { self.category = category; path = pages }
     }
 
-    // The drill's states: `settings` (the sheet as it opens), `display`, `games`, and `about`
-    // (scrolled to that section, or the first game's), `sign-in` (Sign In…'s screen), `sign-in-launch`
+    // The drill's states open the real category/page routes: `settings`, `controls`, `joystick`,
+    // `right-click`, `keyboard`, `game-updates`, `display`, `games`, `account`, and `about`.
+    // `sign-in` opens Sign In…'s screen; `sign-in-launch`
     // (the sign-in screen as a launch with no saved sign-in shows it, full screen; it saves nothing),
     // `vpn`, `pair`, and `pair-code` (the LocalDevVPN wait's and the pairing screen's, the last asking for the
     // code; they do nothing), `acknowledgements` (its
@@ -203,7 +264,7 @@ final class Settings: ObservableObject {
     // whatever's saved, so they can be screenshotted without a credential; Cancel is what a drill expects to
     // be tapped, if anything). `reset-<flavor>` is Reset's Reset tapped: it resets that game's settings with
     // no alert, so a test can check what it deletes and the next start's seeding. `scale-<0|1|2>` picks that
-    // Display > Scale (0 is Automatic), so a test can set it without taps; it's saved, as a tap's is.
+    // legacy backing scale (0 is Automatic) for compatibility with existing developer runs.
     // `files-<flavor>` is that game's Open in Files tapped. `region-<flavor>-<us|eu|kr|tw>` picks that game's
     // Region, saved as a pick is (one the Mac decides logs that it can't). Once, when the sheet has appeared.
     private func presentDrill(_ screen: UIViewController) {
@@ -216,9 +277,15 @@ final class Settings: ObservableObject {
         drill = nil
         let states: [String: () -> Void] = [
             "settings": {},
-            "display": { self.scrollTo?("display") },
-            "games": { if let f = self.flavors.first { self.scrollTo?("game-" + f) } },
-            "about": { self.scrollTo?("about") },
+            "game-updates": { self.push(.account) },
+            "controls": { self.push(.controls) },
+            "joystick": { self.push(.controls, [.joystick]) },
+            "right-click": { self.push(.controls, [.rightClick]) },
+            "keyboard": { self.push(.controls, [.keyboard]) },
+            "account": { self.push(.account) },
+            "display": { self.push(.display) },
+            "games": { self.push(.games) },
+            "about": { self.push(.about) },
             "sign-in": { self.signIn() },
             "sign-in-launch": { self.presentDrill(signInScreen(sp_device_noun() as NSString, { _, _ in "A drill: nothing was saved." }, nil)) },
             "vpn": { self.presentDrill(vpnScreen(sp_device_noun() as NSString, {})) },
@@ -229,7 +296,7 @@ final class Settings: ObservableObject {
                 pairAsk(screen, true)
                 self.presentDrill(screen)
             },
-            "acknowledgements": { self.push([.acknowledgements]) },
+            "acknowledgements": { self.push(.about, [.acknowledgements]) },
             "alert-forget-signin": { self.confirmation = .forgetSignIn },
             "alert-forget-apple-token": { self.confirmation = .forgetAppleToken },
             "alert-reset": { if let f = self.flavors.first { self.confirmation = .reset(f) } },
@@ -237,23 +304,23 @@ final class Settings: ObservableObject {
         var open = states[state]
         let suffix = { (prefix: String) -> String? in state.hasPrefix(prefix) ? String(state.dropFirst(prefix.count)) : nil }
         if open == nil, let f = suffix("reset-"), flavors.contains(f) {
-            open = { say(sp_game_reset(f)); self.reload(); self.scrollTo?("game-" + f) }
+            open = { say(sp_game_reset(f)); self.reload(); self.push(.games, [.game(f)]) }
         }
         if open == nil, let f = suffix("files-"), flavors.contains(f) { open = { self.openInFiles(f) } }
         if open == nil, let rest = suffix("region-"), let dash = rest.lastIndex(of: "-"), flavors.contains(String(rest[..<dash])) {
             let f = String(rest[..<dash]), r = String(rest[rest.index(after: dash)...])
-            open = { self.setRegion(f, r); self.scrollTo?("game-" + f) }
+            open = { self.setRegion(f, r); self.push(.games, [.game(f)]) }
         }
         if open == nil, let i = ["scale-0", "scale-1", "scale-2"].firstIndex(of: state) {
-            open = { setScale(i); self.reload(); self.scrollTo?("display") }
+            open = { setScale(i); self.reload(); self.push(.display) }
         }
         if open == nil, let name = suffix("license-") {
             open = {
                 if let l = License.all().first(where: { (($0.path as NSString).lastPathComponent as NSString).deletingPathExtension == name }) {
-                    self.push([.acknowledgements, .license(l)])
+                    self.push(.about, [.acknowledgements, .license(l)])
                 } else {
                     say("drill: no license " + state)
-                    self.push([.acknowledgements])
+                    self.push(.about, [.acknowledgements])
                 }
             }
         }
@@ -274,42 +341,157 @@ private struct DoneButton: ToolbarContent {
 
 struct SettingsView: View {
     @ObservedObject var settings: Settings
+    @State private var columns: NavigationSplitViewVisibility = .all
 
     var body: some View {
-        NavigationStack(path: $settings.path) {
-            ScrollViewReader { proxy in
-                List {
-                    battleNet
-                    signing
-                    display
-                    #if !os(visionOS)
-                    touch
-                    #endif
-                    ForEach(settings.now.games, id: \.flavor) { game($0) }
-                    about
+        NavigationSplitView(columnVisibility: $columns) {
+            List(selection: Binding(get: { settings.category }, set: {
+                settings.category = $0
+                settings.path = []
+            })) {
+                ForEach(SettingsCategory.available) { category in
+                    NavigationLink(value: category) {
+                        Label {
+                            Text(category.title).lineLimit(1)
+                        } icon: {
+                            Image(systemName: category.icon)
+                        }
+                    }
                 }
-                .listStyle(.insetGrouped)
-                .onAppear { settings.scrollTo = { id in proxy.scrollTo(id, anchor: .top) } }
             }
+            .listStyle(.sidebar)
             .navigationTitle("Settings")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar { DoneButton(settings: settings) }
-            .navigationDestination(for: Page.self) { page in
-                switch page {
-                case .acknowledgements: AcknowledgementsView(settings: settings)
-                case .license(let l): LicenseView(license: l).navigationTitle(l.name).toolbar { DoneButton(settings: settings) }
-                }
+            .navigationSplitViewColumnWidth(min: 260, ideal: 280, max: 320)
+        } detail: {
+            NavigationStack(path: $settings.path) {
+                List { categoryContent(settings.category ?? SettingsCategory.available[0]) }
+                    .listStyle(.insetGrouped)
+                    .navigationTitle((settings.category ?? SettingsCategory.available[0]).title)
+                    .navigationBarTitleDisplayMode(.inline)
+                    .toolbar { DoneButton(settings: settings) }
+                    .navigationDestination(for: Page.self) { page in
+                        switch page {
+                        case .acknowledgements: AcknowledgementsView(settings: settings)
+                        case .license(let license):
+                            LicenseView(license: license).navigationTitle(license.name).toolbar { DoneButton(settings: settings) }
+                        default:
+                            List { pageContent(page) }
+                                .listStyle(.insetGrouped)
+                                .navigationTitle(pageTitle(page))
+                                .navigationBarTitleDisplayMode(.inline)
+                                .toolbar { DoneButton(settings: settings) }
+                        }
+                    }
             }
         }
+        .navigationSplitViewStyle(.balanced)
         .alert(title, isPresented: Binding(get: { settings.confirmation != nil }, set: { if !$0 { settings.confirmation = nil } }),
                presenting: settings.confirmation) { c in
-            // The default (Return, and drawn as the preferred action), as UIKit's preferredAction made it.
             Button("Cancel", role: .cancel) {}.keyboardShortcut(.defaultAction)
             Button(button(c), role: .destructive) { settings.confirm(c) }
         } message: { c in
             Text(message(c))
         }
     }
+
+    @ViewBuilder private func categoryContent(_ category: SettingsCategory) -> some View {
+        switch category {
+        case .controls:
+            #if !os(visionOS)
+            controls
+            #else
+            EmptyView()
+            #endif
+        case .display: display
+        case .games:
+            Section("Games") {
+                ForEach(settings.now.games, id: \.flavor) { selected in
+                    NavigationLink(value: Page.game(selected.flavor)) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(selected.name)
+                            Text(selected.installed ? (selected.version ?? "Installed") : "Not installed")
+                                .font(.subheadline).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+        case .account:
+            battleNet
+            signing
+        case .about: about
+        }
+    }
+
+    private func pageTitle(_ page: Page) -> String {
+        switch page {
+        case .joystick: "Joystick"
+        case .rightClick: "Right-click Button"
+        case .keyboard: "Keyboard Buttons"
+        case .game(let flavor): sp_flavor_name(flavor)
+        case .acknowledgements: "Acknowledgements"
+        case .license(let license): license.name
+        }
+    }
+
+    @ViewBuilder private func pageContent(_ page: Page) -> some View {
+        switch page {
+        #if !os(visionOS)
+        case .joystick: joystick
+        case .rightClick: touch
+        case .keyboard: keyboard
+        #endif
+        case .game(let flavor):
+            if let selected = settings.now.games.first(where: { $0.flavor == flavor }) { game(selected) }
+        default: EmptyView()
+        }
+    }
+
+    #if !os(visionOS)
+    private var controls: some View {
+        Group {
+            Section("On-screen controls") {
+                controlLink("Joystick", icon: "circle.circle", page: .joystick, value: settings.now.joystickEnabled ? "On" : "Off")
+                controlLink("Right-click Button", icon: "cursorarrow.click", page: .rightClick, value: settings.now.thumbEnabled ? "On" : "Off")
+                controlLink("Keyboard Buttons", icon: "keyboard", page: .keyboard, value: "\(settings.now.keyboardEnabled.count) enabled")
+            }
+            Section {
+                Toggle("Lock Button Positions", isOn: Binding(get: { settings.now.buttonPositionsLocked }, set: {
+                    UserDefaults.standard.set($0, forKey: buttonPositionsLockedKey)
+                    settings.reload()
+                }))
+                .accessibilityIdentifier("sp.settings.lock-button-positions")
+            } header: {
+                Text("Placement")
+            } footer: {
+                Text("Keep R, Ctrl, Shift, and Alt fixed while holding or dragging them. Their right-click and key actions still work normally. Turn this off to rearrange them.")
+            }
+            Section {
+                LabeledContent("Click With") {
+                    Picker("Click With", selection: Binding(get: { settings.now.chordRightFinger },
+                                                            set: { setChordRightFinger($0); settings.reload() })) {
+                        Text("Left Finger").tag(false)
+                        Text("Right Finger").tag(true)
+                    }
+                    .pickerStyle(.segmented)
+                }
+            } header: {
+                Text("Touch Gestures")
+            } footer: {
+                Text("Two fingers right-click; three middle-click. Choose which finger sets the click position. With Accessibility Zoom on, three-finger presses lag.")
+            }
+        }
+    }
+
+    private func controlLink(_ title: String, icon: String, page: Page, value: String) -> some View {
+        NavigationLink(value: page) {
+            HStack {
+                Label(title, systemImage: icon)
+                Spacer()
+                Text(value).foregroundStyle(.secondary)
+            }
+        }
+    }
+    #endif
 
     private var title: String {
         switch settings.confirmation {
@@ -376,43 +558,163 @@ struct SettingsView: View {
         }
     }
 
+    private struct DisplayChoice: Identifiable {
+        let id: Int
+        let pixels: CGSize
+        let description: String
+        var dimensions: String { "\(Int(pixels.width)) × \(Int(pixels.height))" }
+    }
+
+    private var displayChoices: [DisplayChoice] {
+        #if os(visionOS)
+        let points = CGSize(width: 2560, height: 1440)
+        let fullScale = 2.0
+        #else
+        guard let screen = settings.host?.view.window?.windowScene?.screen
+                        ?? UIApplication.shared.connectedScenes.compactMap({ ($0 as? UIWindowScene)?.screen }).first else { return [] }
+        let size = screen.bounds.size
+        let points = CGSize(width: max(size.width, size.height), height: min(size.width, size.height))
+        let fullScale = screen.scale
+        #endif
+        let defaultScale = settings.now.scale == 1 || settings.now.scale == 2 ? CGFloat(settings.now.scale)
+                         : UIDevice.current.userInterfaceIdiom == .phone ? 2.0 : 1.0
+        let candidates: [(Int, CGFloat, String)] = [
+            (0, defaultScale, defaultScale == 1 ? "Lower power · Initial default" : "Initial default"),
+            (2, 1, "Lower power"),
+            (1920, 1920 / points.width, "Balanced detail"),
+            (2560, 2560 / points.width, "Higher detail"),
+            (1, fullScale, "Full screen detail · More GPU work"),
+        ]
+        var choices: [DisplayChoice] = []
+        for (id, scale, description) in candidates {
+            let width = points.width * scale, height = points.height * scale
+            let pixels = id == 0 ? CGSize(width: width.rounded(), height: height.rounded())
+                       : CGSize(width: (width / 2).rounded() * 2, height: (height / 2).rounded() * 2)
+            if !choices.contains(where: { $0.pixels == pixels }) {
+                choices.append(DisplayChoice(id: id, pixels: pixels, description: description))
+            }
+        }
+        return choices.sorted { $0.pixels.width < $1.pixels.width }
+    }
+
     private var display: some View {
         Section {
-            LabeledContent("Scale") {
-                Picker("Scale", selection: Binding(get: { settings.now.scale }, set: { setScale($0); settings.reload() })) {
-                    Text("Automatic").tag(0)
-                    Text("1x").tag(1)
-                    Text("2x").tag(2)
+            ForEach(displayChoices) { choice in
+                VStack(alignment: .leading, spacing: 4) {
+                    #if os(visionOS)
+                    Text(choice.dimensions + " pixels")
+                    #else
+                    Text(UIDevice.current.userInterfaceIdiom == .phone ? choice.description : choice.dimensions + " pixels")
+                    #endif
+                    Text(choice.description).font(.subheadline).foregroundStyle(.secondary)
                 }
-                .pickerStyle(.segmented)
-                .fixedSize()
             }
             .id("display")
         } header: {
-            Text("Display")
+            Text("Resolutions in WoW")
         } footer: {
-            Text("This device only. Automatic is 1x on Vision Pro and iPad, and 2x on iPhone. On an iPhone at 1x, set the game’s render scale to 100% in its graphics settings.")
+            VStack(alignment: .leading, spacing: 12) {
+                Text("All resolutions are available in WoW’s Graphics menu. Choose there; your last selection is remembered for the next launch. The initial default stays at the device’s recommended resolution.")
+                Text("Lower resolutions reduce GPU work and are better suited to battery life; higher resolutions add detail and usually use more power.")
+                Text(UIDevice.current.userInterfaceIdiom == .phone
+                     ? "WoW shows the exact dimensions for your game window."
+                     : "Dimensions shown are for landscape and swap in portrait.")
+            }
         }
     }
 
     #if !os(visionOS)
+    private var joystick: some View {
+        Section {
+            Toggle("Show Joystick", isOn: Binding(get: { settings.now.joystickEnabled }, set: {
+                UserDefaults.standard.set($0, forKey: joystickEnabledKey)
+                settings.reload()
+            }))
+            VStack(alignment: .leading) {
+                LabeledContent("Size", value: "\(Int((settings.now.joystickSize / joystickDefaultSize * 100).rounded()))%")
+                Slider(value: Binding(get: { settings.now.joystickSize }, set: {
+                    settings.now.joystickSize = $0
+                    UserDefaults.standard.set($0, forKey: joystickSizeKey)
+                }), in: joystickSizeRange, step: 4)
+                .accessibilityLabel("Joystick Size")
+            }
+            .disabled(!settings.now.joystickEnabled)
+            Button("Reset Position") {
+                UserDefaults.standard.removeObject(forKey: joystickPositionKey)
+            }
+            .disabled(!settings.now.joystickEnabled)
+        } footer: {
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Drag the stick to move your character. Hold the ↔ handle for two seconds until its border fills, then drag to reposition. Lift to lock it again.")
+                Text("An invisible margin absorbs stray finger touches. The game needs controller support enabled. If the joystick shows !, turn it off and on. Size and position are saved on this device.")
+            }
+        }
+    }
+
+    @ViewBuilder private var keyboard: some View {
+        Section {
+            ForEach(keyboardButtons, id: \.name) { button in
+                Toggle(button.label, isOn: Binding(get: { settings.now.keyboardEnabled.contains(button.name) }, set: {
+                    UserDefaults.standard.set($0, forKey: "sp_\(button.name)_enabled")
+                    settings.reload()
+                }))
+            }
+        } header: {
+            Text("Show Buttons")
+        }
+        Section {
+            VStack(alignment: .leading) {
+                LabeledContent("Button Size", value: "\(Int((settings.now.keyboardSize / keyboardDefaultSize * 100).rounded()))%")
+                Slider(value: Binding(get: { settings.now.keyboardSize }, set: {
+                    settings.now.keyboardSize = $0
+                    UserDefaults.standard.set($0, forKey: keyboardSizeKey)
+                }), in: keyboardSizeRange, step: 4)
+                .accessibilityLabel("Keyboard Button Size")
+            }
+            .disabled(settings.now.keyboardEnabled.isEmpty)
+            Button("Reset Keyboard Button Positions") {
+                for button in keyboardButtons { UserDefaults.standard.removeObject(forKey: "sp_\(button.name)_position") }
+            }
+        } header: {
+            Text("Layout")
+        } footer: {
+            VStack(alignment: .leading, spacing: 12) {
+                Text(settings.now.buttonPositionsLocked
+                     ? "Hold Ctrl, Shift, or Alt while using a finger, Apple Pencil, R, or another key. Positions are locked; turn off Lock Button Positions in Controls to rearrange the modifier squares."
+                     : "Hold Ctrl, Shift, or Alt while using a finger, Apple Pencil, R, or another key. Drag a modifier square to move it.")
+                Text("Press anywhere in Space’s circle to jump. Hold still for two seconds while the ring fills; once it turns gold, Space releases and you can drag to reposition. Lift to lock it again. The invisible outer margin absorbs stray touches. Size and positions are saved on this device.")
+            }
+        }
+    }
+
     // Finger chords (spevent.m): two fingers right-click, three middle-click, at one finger's spot.
     private var touch: some View {
         Section {
-            LabeledContent("Click With") {
-                Picker("Click With", selection: Binding(get: { settings.now.chordRightFinger },
-                                                        set: { setChordRightFinger($0); settings.reload() })) {
-                    Text("Left Finger").tag(false)
-                    Text("Right Finger").tag(true)
-                }
-                .pickerStyle(.segmented)
-                .fixedSize()
+            Toggle("Show R Button", isOn: Binding(get: { settings.now.thumbEnabled }, set: {
+                UserDefaults.standard.set($0, forKey: thumbEnabledKey)
+                settings.reload()
+            }))
+            VStack(alignment: .leading) {
+                LabeledContent("Size", value: "\(Int((settings.now.thumbSize / thumbDefaultSize * 100).rounded()))%")
+                Slider(value: Binding(get: { settings.now.thumbSize }, set: {
+                    settings.now.thumbSize = $0
+                    UserDefaults.standard.set($0, forKey: thumbSizeKey)
+                }), in: thumbSizeRange, step: 4)
+                .accessibilityLabel("Thumb Button Size")
             }
+            .disabled(!settings.now.thumbEnabled)
+            Button("Reset Position") {
+                UserDefaults.standard.removeObject(forKey: thumbPositionKey)
+            }
+            .disabled(!settings.now.thumbEnabled)
             .id("touch")
-        } header: {
-            Text("Touch")
         } footer: {
-            Text("Press with two fingers together to right-click, or three to middle-click. The click is where the left or right finger is. With Accessibility Zoom on, three-finger presses lag.")
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Hold R while tapping or dragging with a finger or Apple Pencil to right-click. The right button stays held until that touch lifts, even if you release R first.")
+                Text(settings.now.buttonPositionsLocked
+                     ? "Position is locked. Turn off Lock Button Positions in Controls to move R. Size and position are saved on this device."
+                     : "Drag R to move it. Size and position are saved on this device.")
+            }
         }
     }
     #endif
@@ -530,7 +832,7 @@ final class SettingsHost: UIHostingController<SettingsView> {
 
     override func viewDidAppear(_ animated: Bool) {
         super.viewDidAppear(animated)
-        // After this pass, so the list has rows to scroll to.
+        // After this pass, so the navigation columns are ready for the drill's route.
         DispatchQueue.main.async { [settings] in settings.runDrill() }
     }
 
@@ -550,6 +852,10 @@ public func settingsSheet(_ flavors: NSArray, _ drill: NSString?) -> UIViewContr
     Settings.shown = settings
     // Pinned Dark, as every launcher screen, so its stock controls suit the start screen.
     host.overrideUserInterfaceStyle = .dark
+    if UIDevice.current.userInterfaceIdiom == .pad {
+        host.modalPresentationStyle = .formSheet
+        host.preferredContentSize = CGSize(width: 900, height: 760)
+    }
     return host
 }
 

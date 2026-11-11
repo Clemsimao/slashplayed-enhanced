@@ -47,6 +47,15 @@ client from Blizzard's CDN. It needs no configuration and no game install on the
 - Put scratch files in `$TMPDIR` or `build/`, never in the tree.
 - Run the tests, and `scripts/check-tree.sh` before every commit. CI runs it too: it catches scrubbed
   material, device IDs, team IDs, and signing hashes.
+- For touch-input changes, run `shims/appkit/test-thumb.sh`. It tests the real AppKit shim with synthetic
+  touches and a real virtual controller in a disposable iPad simulator, without a game or an Apple account.
+  It checks analog axes, neutralization, reconnection, joystick positioning, keyboard modifiers,
+  Space's move ring, and simultaneous mouse input.
+  `--build-only` compiles
+  the fixture without starting a simulator; `SIMULATOR=<id>` uses a simulator you explicitly select.
+- For display changes, run `bash shims/appkit/test-display.sh`. It checks the advertised resolutions,
+  in-game selection paths, portrait rotation, display callbacks, and real Metal texture sizes in a
+  disposable iPad simulator. `--build-only` compiles without starting a simulator.
 - Commit messages use [Conventional Commits](https://www.conventionalcommits.org/): a subject of at
   most 72 characters, `type(scope): summary`, in the imperative, with no period; then a blank line and
   a body, wrapped at 72, that says why. Types: `feat`, `fix`, `docs`, `test`, `refactor`, `perf`,

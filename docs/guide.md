@@ -37,6 +37,72 @@ The first start of each game takes a few minutes while it fetches its data from 
 minutes to character select for Classic Era on an iPhone over Wi-Fi). After that, it fetches what
 each zone needs while the game is on screen.
 
+### Touch mouse controls
+
+On iPad and iPhone, tap the game to left-click. Hold the **R** square with one thumb while tapping
+elsewhere with a finger or Apple Pencil to right-click at that position. Holding the square alone does
+not click or move the cursor. A click keeps the same button until the finger or Pencil lifts, even if
+you release your thumb first. Holding the square while dragging a finger or Pencil gives a right-button
+drag.
+
+Drag the square itself to move it; its position is saved on this device and adapts to the available
+screen area after rotation or resizing. Small thumb movements do not move it. In the start screen's
+**Settings > Controls > Right-click Button**, **Size** adjusts the square and its R label from about 58% to 200%
+of the default size; your choice is saved on this device. The default square is 76 points wide, larger
+than the original 52-point button. **Right-Click Thumb Button** hides or shows it, and **Reset Thumb Button
+Position** returns it to the lower-left side. The existing two-finger right click and three-finger
+middle click remain available.
+
+### Keyboard buttons
+
+**Settings > Controls > Lock Button Positions** keeps **R**, **Ctrl**, **Shift**, and **Alt** in
+place while you hold or drag them. Their normal input actions continue working. The toggle starts
+off; enable it after arranging the buttons, and turn it off when you want to move them again.
+Space and the joystick retain their separate two-second hold-to-move gestures.
+
+In **Settings > Controls > Keyboard Buttons**, turn **Ctrl**, **Shift**, **Alt**, and **Space** on or off
+individually. They start hidden. Hold a modifier square while clicking with a finger or Apple Pencil,
+using **R**, or pressing another key. Releasing the square releases that modifier. You can hold more
+than one modifier together, and the buttons also work alongside a physical keyboard.
+
+Drag a modifier square to reposition it, just like **R**. Press anywhere in **Space**'s visible circle
+to hold the spacebar, and lift to release it. Holding still fills the outer ring for **two seconds**;
+once it turns gold, Space releases and you can drag the button to reposition it. Lifting relocks it.
+Early movement cancels the unlock, while continuing to hold Space until you lift. An invisible margin
+of about **one centimeter** absorbs stray finger contacts around the circle, just like the joystick.
+A contact starting in that margin cannot become a jump or a drag, even if it drifts into the circle.
+
+**Button Size** adjusts the keyboard buttons, including Space's surrounding ring.
+**Reset Keyboard Button Positions** restores their default locations. Sizes and positions are saved
+on this device and stay inside the available screen area after resizing or rotation. Hiding a held
+button, resizing it, or leaving the app releases its key and cancels pending move gestures.
+
+### Left joystick
+
+On iPad and iPhone, drag the round joystick to send analog left-thumbstick input to the game. A small
+push sends a smaller movement value, and lifting your thumb returns it to neutral. It appears as a
+connected controller through Apple's GameController framework; the game must support and enable
+controller input. No keyboard bindings are substituted. You can still tap the game and hold **R**
+while moving.
+
+An invisible touch shield extends about **one centimeter** beyond the joystick's edge. A finger that
+lands in this margin does nothing, even if it then drifts into the joystick or onto the game. Only
+touches that start beyond the shield reach the game. The shield moves with the joystick and keeps the
+same width when you resize it. The **R** square stays usable if it overlaps this margin, and hardware
+pointer clicks pass through the invisible margin.
+
+Hold the small **↔** handle at the joystick's upper-right corner for **two seconds**, then drag to
+reposition the whole control. Its border fills while you hold, and the arrow turns gold when unlocked.
+Releasing relocks it. A quick tap or early drag does not move the control; keep your thumb still until
+it unlocks. Character movement with the stick itself stays immediate.
+Dragging the stick itself moves your character. The start screen's **Settings > Controls > Joystick** has
+an on/off switch, a size slider, and **Reset Joystick Position**. Position and size are saved on this
+device, and the control stays inside the game and safe area after resizing. Leaving the app, cancelling
+a touch, or changing the size releases movement. An **!** in the stick means its controller connection
+failed; turn **Left Joystick** off and on to retry.
+The virtual controller connects after the game presents its first frame, so the game can see the
+connection without switching away from the app.
+
 ## Signing in
 
 The first time, Slashplayed asks for your **Battle.net email and password**. It keeps them in the
@@ -76,6 +142,42 @@ Slashplayed. A game's **Open in Files** in Slashplayed's Settings opens it.
 - **Leave `Data/` and `.build.info` alone.** Deleting files there makes the game quit with
   ["installation is damaged"](troubleshooting.md#your-world-of-warcraft-installation-is-damaged).
 
+**Bagnon** downloads automatically the first time you start a game, combining your bags into one
+movable, resizable window. Drag its title bar to move it toward the center, and open its settings to
+adjust scale and columns. The download includes BagBrother and the bank and configuration modules.
+It is cached for later launches, including offline; a failed download lets you play and retries on
+the next launch. Saved settings and WoW's AddOns enable/disable choices are preserved.
+
+Forever and Retail include **SPTouchBars**, installed automatically when you start the game. Open **WoW Settings >
+AddOns > SPTouchBars > Edit layout**, or type `/sptouch`, to choose how many circular spell buttons appear, move and resize them, and arrange
+the bottom utility bar. The new buttons start empty and use their own saved assignments: drag spells
+from the spellbook, items from your bags, and macros from the macro window while editing. The normal
+player action bars are hidden by default; **More... > Default bars: hidden / shown** restores them for setup.
+Pet, stance, vehicle, and special-action controls stay available. Ctrl, Alt, and Shift show alternate
+spells; the circular arrows button switches the main spell set. The selected icon turns teal in the
+editor. Buttons have soft halos and show a gold tint when pressed. Drag any utility icon to move the
+whole bar, and choose its icon count, rows, shared size, and spacing with the native sliders and steppers.
+The compact inspector follows the selected control, with **Spells**, **Utility**, and **Controls** tabs.
+**Border & glow** and **Visibility** open the selected group's options; **More...** holds modifier layers
+and reset/clear actions. **Preview** shows the play appearance while actions remain disabled. **Undo**
+restores the current editing session; **Done** keeps changes.
+Separate **Interact** and **Target** controls can each be moved, resized, or turned off in Settings.
+On Forever, Interact follows the game's talk/loot/attack behavior; **Nearby interaction** enables detection for
+touch input while the control is active. Move close and face the NPC or corpse. Target cycles
+enemies (Shift cycles backward). Ctrl, Alt, and Shift each have their own layer toggle in Settings
+and the editor; turn off any modifier layer you want to use for macros instead. **Quest steps** makes
+Interact open, accept, continue, and turn in quests in list order, one step per press. Multiple reward
+choices require a manual selection before the turn-in press. **Outline colour** opens the native colour
+picker. The **Spell buttons** and **Utility bar** settings pages have separate colour, outline opacity,
+and glow sliders, plus whole-bar and empty-slot visibility toggles. Empty slots hide during play by
+default and return in Edit layout. The movable **Map** button toggles the world map and starts near
+the minimap; **Map** and **Set arrows** have independent on/off switches. The set arrows have a
+transparent background. New app
+builds update the addon while keeping your saved layout. Disable it in WoW's AddOns list if you prefer
+the standard bars. On Retail, use WoW’s Interact With Target key/controller binding or normal world
+click to talk or loot; the Interact circle advances already open quests.
+The standalone addon is available at [Touchbars](https://github.com/rollarz/Touchbars).
+
 ## Copying game files from the Mac
 
 If the game is installed on the Mac through Battle.net, turn on **Copy Game Files from This Mac** for
@@ -106,8 +208,19 @@ A paid **Apple Developer Program** membership signs for a year, with none of tho
 - **The companion** (⌘,): team, bundle ID prefix, devices and their games, copying game files,
   the game install, and update checks. Changing the team or bundle ID
   prefix makes a new app on each device, with no game files: they're fetched or copied again.
-- **The device** (the gear on Slashplayed's start screen): the saved sign-in, each game's build and
-  where it came from, its region, Open in Files, Reset Game Settings, and Display (the render scale).
+- **The device** (the gear on Slashplayed's start screen): Controls, Display, Games, Account, and About.
+  iPad uses a category sidebar; narrow windows use normal back navigation. Control instructions stay
+  visible below their settings. Each game's build, region, Open in Files, and Reset Game Settings are
+  under Games; the saved sign-in is under Account, and signing/renewal details under Account.
+
+All supported resolutions appear directly in WoW's **Graphics > Resolution**. On a full-screen
+12.9-inch iPad Pro, the choices are **1366×1024**, **1920×1440**, **2560×1920**, and **2732×2048**.
+The initial default remains the lower-power mode; once you choose another, the game remembers it
+for the next launch. Existing resolution choices and older scale preferences are kept when updating.
+**Settings > Display** explains the available choices with pixel dimensions and battery/detail
+tradeoffs. Higher resolutions usually use more GPU power. Dimensions follow the game window's
+aspect ratio and swap when you rotate into portrait. WoW's separate Render Scale slider still
+controls how sharply the 3D world is rendered within the chosen resolution.
 
 ## Updates
 

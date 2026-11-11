@@ -966,12 +966,16 @@ NSString *sp_flavor_info(NSString *product) {
     return [NSString stringWithFormat:@"Product Flavor!STRING:0\n%@\n", product];
 }
 
-BOOL sp_addons_place(NSString *addons, NSString *game, BOOL hover, NSString **line) {
+BOOL sp_addons_place(NSString *addons, NSString *game, NSString *flavor, BOOL hover, NSString **line) {
     NSFileManager *fm = NSFileManager.defaultManager;
     NSMutableArray<NSString *> *written = [NSMutableArray array], *failed = [NSMutableArray array];
     NSUInteger same = 0;
-    for (NSString *name in hover ? @[@"SPMovie", @"SPHover"] : @[@"SPMovie"])
-        for (NSString *ext in @[@"toc", @"lua"]) {
+    NSMutableArray<NSString *> *names = [NSMutableArray arrayWithObject:@"SPMovie"];
+    if (hover) [names addObject:@"SPHover"];
+    // The touch bars support Forever and Retail; the other Classic clients keep their native bars.
+    if ([flavor isEqualToString:@"forever"] || [flavor isEqualToString:@"retail"]) [names addObject:@"SPTouchBars"];
+    for (NSString *name in names)
+        for (NSString *ext in ([name isEqualToString:@"SPTouchBars"] ? @[@"toc", @"lua", @"tga"] : @[@"toc", @"lua"])) {
             NSString *file = [NSString stringWithFormat:@"%@/%@.%@", name, name, ext];
             NSData *bytes = [NSData dataWithContentsOfFile:[addons stringByAppendingPathComponent:file]];
             if (!bytes) {

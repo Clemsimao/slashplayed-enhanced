@@ -101,6 +101,9 @@ final class ClientAssemblyTests: XCTestCase {
             XCTAssertEqual((plist["CFBundleIcons~ipad"] != nil), platform == .ios)
             XCTAssertEqual(plist["UISupportedInterfaceOrientations~iphone"] as? [String],
                            platform == .ios ? ["UIInterfaceOrientationLandscapeLeft", "UIInterfaceOrientationLandscapeRight"] : nil)
+            XCTAssertEqual(plist["UISupportedInterfaceOrientations~ipad"] as? [String],
+                           platform == .ios ? ["UIInterfaceOrientationPortrait", "UIInterfaceOrientationPortraitUpsideDown",
+                                               "UIInterfaceOrientationLandscapeLeft", "UIInterfaceOrientationLandscapeRight"] : nil)
         }
         let ents = ClientAssembly.entitlements(template: try String(contentsOf: client.appending(path: "entitlements.plist"), encoding: .utf8),
                                                team: "ABCDE12345", bundleID: "ABCDE12345.slashplayed")
@@ -186,7 +189,7 @@ final class ClientAssemblyTests: XCTestCase {
                               "PlugIns/SPJitHelper.appex/Info.plist", "flavors.plist", "wow.icns",
                               "exports.json", "rewrite-map.txt", "licenses",
                               "licenses/idevice.txt", "licenses/rust-std.html", "licenses/spapple.txt", "licenses/goodmountain.txt",
-                              "Goodmountain-Regular.otf", "addons", "addons/SPMovie", "addons/SPHover"])
+                              "Goodmountain-Regular.otf", "addons", "addons/SPMovie", "addons/SPHover", "addons/SPTouchBars"])
                        .union(ClientAssembly.addonFiles.map { "addons/" + $0 }))
         // The addons the launcher places (sp_addons_place), byte for byte as addon/ has them.
         for file in ClientAssembly.addonFiles {

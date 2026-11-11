@@ -187,6 +187,14 @@ static void sp_loading_remove(void) {
 // down. Not inline: the main thread is the client's, so the screen goes on the next UIKit turn, which
 // comes with the client's first frames.
 static void sp_loading_frame(void) {
+#if !TARGET_OS_VISION
+    // Controller discovery must happen after the game has initialized, rather than on the launcher's
+    // early UIKit screen. Keep this independent of a loading-screen screenshot drill.
+    if (!atomic_exchange(&sp_game_presented, true))
+        dispatch_async(dispatch_get_main_queue(), ^{
+            [NSNotificationCenter.defaultCenter postNotificationName:@"SPGameFirstFrame" object:nil];
+        });
+#endif
     if (sp_loading_drill != -2 || sp_loading_presented || atomic_exchange(&sp_loading_presented, 1)) return;
     dispatch_async(dispatch_get_main_queue(), ^{ sp_loading_remove(); });
 }

@@ -57,10 +57,6 @@ static void sp_log_selector(Class cls, NSInvocation *inv, BOOL isClass) {
 // ---- functions: log once, return 0 in x0 (d0 and struct returns are undefined)
 void *sp_CGDisplayModelNumber(void) __asm__("_CGDisplayModelNumber");
 void *sp_CGDisplayModelNumber(void) { SP_LOG_ONCE("CGDisplayModelNumber"); return 0; }
-void *sp_CGDisplayRegisterReconfigurationCallback(void) __asm__("_CGDisplayRegisterReconfigurationCallback");
-void *sp_CGDisplayRegisterReconfigurationCallback(void) { SP_LOG_ONCE("CGDisplayRegisterReconfigurationCallback"); return 0; }
-void *sp_CGDisplayRemoveReconfigurationCallback(void) __asm__("_CGDisplayRemoveReconfigurationCallback");
-void *sp_CGDisplayRemoveReconfigurationCallback(void) { SP_LOG_ONCE("CGDisplayRemoveReconfigurationCallback"); return 0; }
 void *sp_CGDisplaySerialNumber(void) __asm__("_CGDisplaySerialNumber");
 void *sp_CGDisplaySerialNumber(void) { SP_LOG_ONCE("CGDisplaySerialNumber"); return 0; }
 void *sp_CGDisplayVendorNumber(void) __asm__("_CGDisplayVendorNumber");

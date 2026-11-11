@@ -239,13 +239,21 @@ static SPEvent *sp_repeat_key;
 static NSTimeInterval sp_repeat_at;
 static const NSTimeInterval sp_repeat_delay = 0.42, sp_repeat_interval = 0.083;
 
-static void sp_key(UIKey *key, BOOL down) {
-    unsigned usage = (unsigned)key.keyCode;
+// A screen button and a physical key may hold the same key at once. Releasing either source must
+// leave it down until the other releases too, including the left/right bits on flagsChanged events.
+static NSMutableIndexSet *sp_hardware_keys, *sp_touch_keys;
+static void sp_key_input(unsigned usage, NSString *characters, NSString *ignoring, BOOL down, BOOL touch) {
     unsigned short mac = usage < 256 ? sp_hid_to_mac[usage] : 0;
     if (!mac && usage != 0x04) {  // 0x04 (a) is the one key whose code is 0
-        sp_stub_log([NSString stringWithFormat:@"input: unmapped HID usage 0x%x '%@'", usage, key.characters].UTF8String);
+        sp_stub_log([NSString stringWithFormat:@"input: unmapped HID usage 0x%x '%@'", usage, characters].UTF8String);
         return;
     }
+    if (!sp_hardware_keys) { sp_hardware_keys = [NSMutableIndexSet indexSet]; sp_touch_keys = [NSMutableIndexSet indexSet]; }
+    BOOL wasDown = [sp_hardware_keys containsIndex:usage] || [sp_touch_keys containsIndex:usage];
+    NSMutableIndexSet *source = touch ? sp_touch_keys : sp_hardware_keys;
+    if (down) [source addIndex:usage]; else [source removeIndex:usage];
+    BOOL nowDown = [sp_hardware_keys containsIndex:usage] || [sp_touch_keys containsIndex:usage];
+    if (wasDown == nowDown) return;
     NSUInteger flag, dev;
     if (sp_modifier_bits(mac, &flag, &dev)) {
         if (flag == SPCapsLock) {
@@ -267,8 +275,8 @@ static void sp_key(UIKey *key, BOOL down) {
         e->characters = e->charactersIgnoringModifiers = [NSString stringWithCharacters:&fc length:1];
         if (fc >= 0xF700) e->modifierFlags |= SPFunction;
     } else {
-        e->characters = key.characters ?: @"";
-        e->charactersIgnoringModifiers = key.charactersIgnoringModifiers ?: e->characters;
+        e->characters = characters ?: @"";
+        e->charactersIgnoringModifiers = ignoring ?: e->characters;
     }
     if (sp_is_keypad(mac) || (mac >= 0x7B && mac <= 0x7E)) e->modifierFlags |= SPNumericPad;
     sp_post(e);
@@ -278,6 +286,14 @@ static void sp_key(UIKey *key, BOOL down) {
     } else if (sp_repeat_key && sp_repeat_key->keyCode == mac) {
         sp_repeat_key = nil;
     }
+}
+
+static void sp_key(UIKey *key, BOOL down) {
+    sp_key_input((unsigned)key.keyCode, key.characters, key.charactersIgnoringModifiers, down, NO);
+}
+
+static void sp_touch_key(unsigned usage, BOOL down) {
+    sp_key_input(usage, usage == 0x2C ? @" " : @"", usage == 0x2C ? @" " : @"", down, YES);
 }
 
 static void sp_key_repeats(void) {
@@ -663,6 +679,10 @@ static double sp_chord_window(void) {
     if (w < 0) w = (getenv("SP_CHORD_MS") ? atof(getenv("SP_CHORD_MS")) : 50) / 1000;
     return w;
 }
+
+#include "spthumb.m"
+#include "spjoystick.m"
+#include "spkeys.m"
 #endif
 
 @implementation SPInputView {
@@ -675,6 +695,11 @@ static double sp_chord_window(void) {
     UIEventButtonMask _mask;              // the buttons reported down
     CGPoint _scroll_last;
     BOOL _hover_in_game;                  // the hover is over the game, and entered it
+#if !TARGET_OS_VISION
+    SPThumbButton *_thumbButton;
+    SPJoystick *_joystick;
+    NSArray<SPKeyboardButton *> *_keyboardButtons;
+#endif
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
@@ -708,6 +733,29 @@ static double sp_chord_window(void) {
     sp_cursor_view.hidden = YES;
     sp_cursor_view.layer.zPosition = 2000;
     [self addSubview:sp_cursor_view];
+#if !TARGET_OS_VISION
+    _thumbButton = [[SPThumbButton alloc] initWithFrame:CGRectZero];
+    [self addSubview:_thumbButton];
+    _joystick = [[SPJoystick alloc] initWithFrame:CGRectZero];
+    [self addSubview:_joystick];
+    [self bringSubviewToFront:_thumbButton];  // R remains usable if its target overlaps the touch shield
+    _keyboardButtons = @[
+        [[SPKeyboardButton alloc] initWithName:@"ctrl" label:@"Ctrl" usage:0xE0 position:CGPointMake(0.32, 1)],
+        [[SPKeyboardButton alloc] initWithName:@"shift" label:@"Shift" usage:0xE1 position:CGPointMake(0.44, 1)],
+        [[SPKeyboardButton alloc] initWithName:@"alt" label:@"Alt" usage:0xE2 position:CGPointMake(0.56, 1)],
+        [[SPKeyboardButton alloc] initWithName:@"space" label:@"Space" usage:0x2C position:CGPointMake(1, 1)],
+    ];
+    // Put modifier targets and R above Space's invisible margin, as with the joystick shield.
+    for (SPKeyboardButton *button in _keyboardButtons.reverseObjectEnumerator) [self addSubview:button];
+    [self bringSubviewToFront:_thumbButton];
+    NSNotificationCenter *notifications = NSNotificationCenter.defaultCenter;
+    [notifications addObserver:self selector:@selector(sp_suspend_touch:) name:UIApplicationWillResignActiveNotification object:nil];
+    [notifications addObserver:self selector:@selector(sp_suspend_touch:) name:UISceneWillDeactivateNotification object:nil];
+    [notifications addObserver:self selector:@selector(sp_resume_touch:) name:UIApplicationDidBecomeActiveNotification object:nil];
+    [notifications addObserver:self selector:@selector(sp_resume_touch:) name:UISceneDidActivateNotification object:nil];
+    [notifications addObserver:self selector:@selector(sp_thumb_preferences:) name:NSUserDefaultsDidChangeNotification object:nil];
+    [notifications addObserver:self selector:@selector(sp_game_frame:) name:@"SPGameFirstFrame" object:nil];
+#endif
     if (!getenv("SP_CURSOR_SYSTEM")) [self addInteraction:[[UIPointerInteraction alloc] initWithDelegate:self]];
     [NSNotificationCenter.defaultCenter addObserverForName:UIPointerLockStateDidChangeNotification object:nil queue:nil
                                                 usingBlock:^(NSNotification *n) {
@@ -717,6 +765,43 @@ static double sp_chord_window(void) {
     }];
     return self;
 }
+
+#if !TARGET_OS_VISION
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    CGRect safe = UIEdgeInsetsInsetRect(self.bounds, self.safeAreaInsets);
+    [_thumbButton layoutInRect:CGRectIntersection(safe, sp_game_rect())];
+    [_joystick layoutInRect:CGRectIntersection(safe, sp_game_rect())];
+    for (SPKeyboardButton *button in _keyboardButtons) [button layoutInRect:CGRectIntersection(safe, sp_game_rect())];
+}
+
+- (void)sp_thumb_preferences:(NSNotification *)notification {
+    [self setNeedsLayout];
+}
+
+- (void)sp_game_frame:(NSNotification *)notification {
+    [_joystick gameDidStart];
+}
+
+- (void)sp_suspend_touch:(NSNotification *)notification {
+    if ([notification.object isKindOfClass:UIScene.class] && notification.object != self.window.windowScene) return;
+    [_thumbButton cancelHold];
+    for (SPKeyboardButton *button in _keyboardButtons) [button cancelInput];
+    [_joystick setSuspended:YES];
+    // Clear the game's latched buttons too: a finger held during app switching may never send an up.
+    if (_touches.count) [self touchesCancelled:[NSSet setWithArray:_touches] withEvent:nil];
+}
+
+- (void)sp_resume_touch:(NSNotification *)notification {
+    if ([notification.object isKindOfClass:UIScene.class] && notification.object != self.window.windowScene) return;
+    [_joystick setSuspended:NO];
+    [self setNeedsLayout];
+}
+
+- (void)dealloc {
+    [NSNotificationCenter.defaultCenter removeObserver:self];
+}
+#endif
 
 - (UIPointerStyle *)pointerInteraction:(UIPointerInteraction *)interaction styleForRegion:(UIPointerRegion *)region {
     static int logged;
@@ -755,6 +840,9 @@ static double sp_chord_window(void) {
 - (void)didMoveToWindow {
     [super didMoveToWindow];
     if (self.window) [self becomeFirstResponder];
+#if !TARGET_OS_VISION
+    else [self sp_suspend_touch:nil];
+#endif
 }
 
 - (void)sp_pointer_entered:(CGPoint)p {
@@ -865,6 +953,10 @@ static double sp_chord_window(void) {
 }
 
 - (void)touchesBegan:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+#if !TARGET_OS_VISION
+    // UIKit can deliver a simultaneous game tap before the modifier's own callback.
+    for (SPKeyboardButton *button in _keyboardButtons) [button syncWithEvent:event];
+#endif
     for (UITouch *t in touches) {
         // A pinch has no pointer to draw a cursor at.
         if (!_touches.count) {
@@ -873,6 +965,13 @@ static double sp_chord_window(void) {
         }
         [_touches addObject:t];
 #if !TARGET_OS_VISION
+        // The square is a separate UIKit touch, never a chord finger or the mouse's position. Latch
+        // the button now so releasing the thumb before this finger or Pencil cannot change its up.
+        // Pencil uses the modifier without joining finger chords or remapping hardware mouse buttons.
+        if ((sp_finger(t) || t.type == UITouchTypePencil) && [_thumbButton heldInEvent:event]) {
+            [_finger_button setObject:@(UIEventButtonMaskSecondary) forKey:t];
+            continue;
+        }
         // A chord starts with a finger that's the only touch, and takes fingers until it's resolved.
         if (sp_finger(t) && (_chord.count || _touches.count == 1)) {
             [_chord addObject:t];
@@ -966,6 +1065,9 @@ static double sp_chord_window(void) {
 }
 
 - (void)touchesMoved:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+#if !TARGET_OS_VISION
+    for (SPKeyboardButton *button in _keyboardButtons) [button syncWithEvent:event];
+#endif
     if (!_touches.count || ![touches intersectsSet:[NSSet setWithArray:_touches]]) return;
     if (_chord.count) return;  // the press, and the moves after it, wait for the chord (sp_chord_resolve)
     UITouch *mover = [self sp_mover:touches];
@@ -975,6 +1077,9 @@ static double sp_chord_window(void) {
 }
 
 - (void)touchesEnded:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
+#if !TARGET_OS_VISION
+    for (SPKeyboardButton *button in _keyboardButtons) [button syncWithEvent:event];
+#endif
 #if !TARGET_OS_VISION
     // A finger lifting in the window resolves the chord first, so a quick tap is a click.
     if ([touches intersectsSet:[NSSet setWithArray:_chord]]) [self sp_chord_resolve];
@@ -1009,6 +1114,9 @@ static double sp_chord_window(void) {
 }
 
 - (void)pressesBegan:(NSSet<UIPress *> *)presses withEvent:(UIPressesEvent *)event {
+#if !TARGET_OS_VISION
+    for (SPKeyboardButton *button in _keyboardButtons) [button syncWithEvent:event];
+#endif
     for (UIPress *p in presses)
         if (p.key) sp_key(p.key, YES);
 }

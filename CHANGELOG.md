@@ -8,6 +8,53 @@ All notable changes to Slashplayed are documented here. The format is based on
 
 ### Added
 
+- Touchbars also supports Retail, preserving existing layouts. Its Interact circle advances open
+  quests; talking and looting use WoW’s normal Interact key/controller binding on Retail.
+
+- Settings > Controls has a Lock Button Positions toggle for R, Ctrl, Shift, and Alt. Locked buttons
+  keep their positions while held or dragged, and their right-click and key actions still work.
+
+- Settings now uses a category sidebar on iPad, with separate Controls, Display, Games, Account,
+  and About pages. Control instructions stay visible below their settings.
+- Bagnon downloads automatically on first game launch, including its bag, bank, and configuration
+  modules. Later launches use the cached download, including offline. SPMovie and SPTouchBars now
+  have distinct icons in WoW's AddOns list.
+- A bundled, automatically installed SPTouchBars addon for Forever and Retail: choose how many circular
+  spell buttons appear, move and resize each one, switch spells with Ctrl, Alt, or Shift, and tap
+  between two spell sets. A bottom utility bar holds consumables, buffs, and mounts. Both use their
+  own assignments and start empty, keeping the original bars' assignments intact. Normal player
+  action bars are hidden by default, with an editor toggle to show them; pet, stance, vehicle, and
+  special-action controls remain available. Editing opens from WoW Settings, with a teal selection
+  highlight and a circular arrows set switch. Utility icons move as a group with configurable count,
+  rows, size, and spacing. Ctrl, Alt, and Shift layers can each be enabled separately. All buttons
+  have bevelled rims, soft halos, and a gold press tint, with full circular faces for the separate
+  Interact and Target controls, which can each be moved, resized, or turned off. Interact can work
+  through quest offers and completed turn-ins in display order, one step per press, waiting for a
+  manual reward choice when needed. Separate spell/utility settings customize outline colour, opacity,
+  and glow, hide empty slots or entire bars, and restore hidden slots while editing. A movable Map
+  circle toggles the world map near the minimap; the set switch uses smooth vector-drawn arrows with balanced tips, a larger centered set label, and a circular border with a light translucent tint.
+  A compact native inspector follows the selected control, with spell, utility, and control tabs,
+  sliders, separate appearance/visibility views, a safe play preview, and session Undo. Size controls
+  ask you to select a button before showing its size.
+- Optional Ctrl, Shift, Alt, and Space buttons on iPad and iPhone, each with its own on/off toggle in
+  Settings > Controls > Keyboard Buttons. Hold modifiers while using a finger, Apple Pencil, R, or another key.
+  Drag modifier squares to move them. Press anywhere in Space's circle to jump; hold still for two
+  seconds while its ring fills to unlock dragging. An invisible margin absorbs stray touches around
+  Space, like the joystick. Button size and positions are saved on the device.
+- All supported resolutions are available directly in WoW's Graphics menu, including full screen
+  detail. On the 12.9-inch iPad Pro the choices are 1366×1024, 1920×1440, 2560×1920, and 2732×2048.
+  The lower-power initial default is kept, and WoW remembers the last choice. Settings > Display
+  shows pixel dimensions and battery/detail tradeoffs, without availability switches or a scale picker.
+- An on-screen left joystick on iPad and iPhone sends analog controller input to games. Hold its arrow
+  handle for two seconds, then drag to reposition it; Settings > Controls > Joystick saves its size, hides it,
+  or resets its position. A filling border shows the hold progress, and gold means dragging is unlocked.
+  Lifting your thumb or leaving the app stops movement. Screen taps and the R square work while moving.
+  An invisible margin of about one centimeter around the joystick absorbs stray touches without
+  clicking the game or moving the stick.
+- A movable R square on iPad and iPhone: hold it with your thumb while tapping elsewhere to right-click.
+  Drag the square to reposition it; its position is saved on the device. The square is larger by default,
+  and Settings > Controls > Right-click Button has a size slider, plus options to hide it or reset
+  its position.
 - An iPad or iPhone set up with slashplayed-companion keeps itself signed. On a free Apple ID, Slashplayed
   renews its own signing over the internet when a game starts in the last 3 days before it runs out, so
   you don't run the tool again every week. If it can't, the start screen says so and on which day the app
@@ -43,6 +90,19 @@ All notable changes to Slashplayed are documented here. The format is based on
 
 ### Fixed
 
+- SPTouchBars enables nearby NPC and corpse interaction for touch/mouse input while Interact is
+  available, instead of relying on a gamepad-only default that required manually selecting a target.
+  The override is temporary and can be turned off in the addon's settings.
+- SPTouchBars starts fully instead of stopping with a single unlabeled red button on Forever.
+- Holding the R square now makes Apple Pencil taps and drags use the right mouse button, just like
+  finger touches. Releasing R first keeps the right button held until the Pencil lifts.
+- The virtual joystick connects when you first touch it after the game starts, rather than on an
+  early menu frame, so controller discovery happens when you use it. A thumb held during connection
+  starts moving once it connects, without lifting or minimizing the game. The first touch also
+  recovers a missed startup activation instead of leaving the knob frozen until an app switch.
+- Selecting the 1920-pixel resolution no longer shrinks the screen reported to WoW and prevents
+  switching up to the 2560-pixel resolution.
+- Building from source works when the Rust toolchain path contains spaces.
 - slashplayed-companion no longer stops with "…helper's profile grants … which it shouldn't" on a paid team
   whose Slashplayed helper has the memory capabilities turned on, as Xcode's setup can leave it.
 - The iPad mini (A17 Pro) was refused as an iPad that can't run the game, though it has the iPhone

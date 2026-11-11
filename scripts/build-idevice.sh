@@ -99,7 +99,9 @@ git -C "$OUT/src" -c advice.detachedHead=false checkout --quiet --force "$COMMIT
 # clone) to fixed names, so nothing built from this names anyone's home directory.
 CARGO_DIR=${CARGO_HOME:-$HOME/.cargo}
 SYSROOT=$(rustup run "$TOOLCHAIN" rustc --print sysroot)
-export RUSTFLAGS="--remap-path-prefix=$CARGO_DIR/registry/src=/cargo --remap-path-prefix=$CARGO_DIR/git/checkouts=/cargo-git --remap-path-prefix=$SYSROOT=/rustc --remap-path-prefix=$OUT/src=/idevice"
+# Cargo splits RUSTFLAGS on spaces, including spaces inside a source or toolchain path. Its encoded
+# form keeps each remap intact when a checkout lives in a folder such as "Slashplayed fork".
+export CARGO_ENCODED_RUSTFLAGS="--remap-path-prefix=$CARGO_DIR/registry/src=/cargo"$'\x1f'"--remap-path-prefix=$CARGO_DIR/git/checkouts=/cargo-git"$'\x1f'"--remap-path-prefix=$SYSROOT=/rustc"$'\x1f'"--remap-path-prefix=$OUT/src=/idevice"
 rm -f "$OUT/BUILD.txt.tmp"
 kept=""
 if [ -f "$OUT/BUILD.txt" ]; then

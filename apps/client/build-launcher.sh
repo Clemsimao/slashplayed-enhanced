@@ -27,7 +27,7 @@ trap 'rm -rf "$TMP"' EXIT
 # Objective-C they call, and their C entry points the Objective-C calls. -parse-as-library: main is launcher.m's. -wmo: one module, one object.
 xcrun --sdk "$SP_SDK" swiftc -target "$SP_TARGET" -O -wmo -parse-as-library -module-name SPLauncher \
   -import-objc-header spswift.h -c spstyle.swift spstartscreen.swift spsettings.swift spsignin.swift sppairscreen.swift spvpnscreen.swift sppatchscreen.swift -o "$TMP/spswift.o"
-for m in launcher spjit sppair spvpn splogin spstart sppatch spcdn spbind spguestlaunch spapple; do
+for m in launcher spjit sppair spvpn splogin spstart sppatch spcdn spaddons spbind spguestlaunch spapple; do
   xcrun --sdk "$SP_SDK" clang -target "$SP_TARGET" -O1 -Wall -fobjc-arc -c $m.m -o "$TMP/$m.o"
 done
 # spguest, the loader (spguestlaunch.m runs it); guesttest/ is its test.

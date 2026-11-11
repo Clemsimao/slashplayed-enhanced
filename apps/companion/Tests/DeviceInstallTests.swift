@@ -101,7 +101,7 @@ final class DeviceInstallTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: game) }
         func place(hover: Bool) -> (ok: Bool, line: String) {
             var line: NSString?
-            let ok = sp_addons_place(addons.path, game.path, hover, &line)
+            let ok = sp_addons_place(addons.path, game.path, Flavor.classicEra.rawValue, hover, &line)
             return (ok, (line as String?) ?? "")
         }
         let movie = game.appending(path: "Interface/AddOns/SPMovie/SPMovie.lua")
@@ -122,8 +122,73 @@ final class DeviceInstallTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: movie), try Data(contentsOf: addons.appending(path: "SPMovie/SPMovie.lua")))
         // An app without them says so.
         var line: NSString?
-        XCTAssertFalse(sp_addons_place(game.appending(path: "none").path, game.path, false, &line))
+        XCTAssertFalse(sp_addons_place(game.appending(path: "none").path, game.path, Flavor.classicEra.rawValue, false, &line))
         XCTAssertTrue((line as String?)?.contains("FAILED SPMovie/SPMovie.toc (not in the app)") == true, "\(String(describing: line))")
+    }
+
+    /// The bundle carries all three addons; Forever and Retail receive the touch bars. Both platform
+    /// selections are checked, including devices that install a game themselves and have no Mac copy.
+    func testTouchBarsAreInstalledForForeverAndRetail() throws {
+        let fm = FileManager.default
+        let addons = ClientAssemblyTests.repo.appending(path: "addon")
+        let base = fm.temporaryDirectory.appending(path: "sp-touch-addons-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: base) }
+        for flavor in Flavor.allCases {
+            for hover in [false, true] {
+                let game = base.appending(path: "\(flavor.rawValue)-\(hover)")
+                var line: NSString?
+                XCTAssertTrue(sp_addons_place(addons.path, game.path, flavor.rawValue, hover, &line), "\(String(describing: line))")
+                let installed = game.appending(path: "Interface/AddOns")
+                var expected: Set<String> = ["SPMovie"]
+                if hover { expected.insert("SPHover") }
+                if flavor == .forever || flavor == .retail { expected.insert("SPTouchBars") }
+                XCTAssertEqual(Set(try fm.contentsOfDirectory(atPath: installed.path)), expected)
+                for name in expected {
+                    for ext in (name == "SPTouchBars" ? ["toc", "lua", "tga"] : ["toc", "lua"]) {
+                        let file = "\(name)/\(name).\(ext)"
+                        XCTAssertEqual(try Data(contentsOf: installed.appending(path: file)),
+                                       try Data(contentsOf: addons.appending(path: file)), file)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Launches repair missing or outdated source files, leave identical copies alone, and don't
+    /// overwrite the player's saved layout when a new app bundles a new version of the addon.
+    func testTouchBarsUpdatesPreserveSavedLayout() throws {
+        let fm = FileManager.default
+        let addons = ClientAssemblyTests.repo.appending(path: "addon")
+        let game = fm.temporaryDirectory.appending(path: "sp-touch-update-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: game) }
+        func place() -> String {
+            var line: NSString?
+            XCTAssertTrue(sp_addons_place(addons.path, game.path, Flavor.forever.rawValue, false, &line))
+            return (line as String?) ?? ""
+        }
+        XCTAssertTrue(place().contains("SPTouchBars/SPTouchBars.lua"))
+        let lua = game.appending(path: "Interface/AddOns/SPTouchBars/SPTouchBars.lua")
+        let toc = game.appending(path: "Interface/AddOns/SPTouchBars/SPTouchBars.toc")
+        try fm.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1)], ofItemAtPath: lua.path)
+        XCTAssertEqual(place(), "addons: 5 up to date")
+        XCTAssertEqual(try lua.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate,
+                       Date(timeIntervalSince1970: 1))
+        let saved = game.appending(path: "WTF/Account/Test/SavedVariables/SPTouchBars.lua")
+        try fm.createDirectory(at: saved.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let layout = Data("SPTouchBarsDB = { count = 9 }".utf8)
+        try layout.write(to: saved)
+        try Data("-- old touch bars".utf8).write(to: lua)
+        try fm.removeItem(at: toc)
+        XCTAssertEqual(place(), "addons: 3 up to date, wrote SPTouchBars/SPTouchBars.toc SPTouchBars/SPTouchBars.lua")
+        XCTAssertEqual(try Data(contentsOf: lua), try Data(contentsOf: addons.appending(path: "SPTouchBars/SPTouchBars.lua")))
+        XCTAssertEqual(try Data(contentsOf: saved), layout)
+        // Missing or damaged artwork is repaired just like addon source, without touching layout.
+        let texture = game.appending(path: "Interface/AddOns/SPTouchBars/SPTouchBars.tga")
+        try Data("damaged texture".utf8).write(to: texture)
+        XCTAssertEqual(place(), "addons: 4 up to date, wrote SPTouchBars/SPTouchBars.tga")
+        XCTAssertEqual(try Data(contentsOf: texture),
+                       try Data(contentsOf: addons.appending(path: "SPTouchBars/SPTouchBars.tga")))
+        XCTAssertEqual(try Data(contentsOf: saved), layout)
     }
 
     /// The .flavor.info the launcher writes for a game is the one the companion sends.
