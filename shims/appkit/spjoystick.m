@@ -17,6 +17,9 @@ static const NSTimeInterval sp_joystick_move_hold = 2;
 @interface SPJoystick : UIControl <SPMovableControl>
 @property(nonatomic, readonly) CGPoint value;
 @property(nonatomic, readonly) GCController *controller;
+// The touch stick's own pad, set from the moment it connects, and whether its connect is still pending.
+@property(nonatomic, readonly) GCController *virtualPad;
+@property(nonatomic, readonly) BOOL connectPending;
 - (void)layoutInRect:(CGRect)rect;
 - (void)cancelInput;
 - (void)setSuspended:(BOOL)suspended;
@@ -207,6 +210,8 @@ static const NSTimeInterval sp_joystick_move_hold = 2;
 
 - (CGPoint)value { return _value; }
 - (GCController *)controller { return _connected ? _virtualController.controller : nil; }
+- (GCController *)virtualPad { return _virtualController.controller; }
+- (BOOL)connectPending { return _virtualController && !_connected; }
 
 - (void)drawValue {
     CGFloat size = self.bounds.size.width, travel = size * 0.30, knobSize = size * 0.36;
@@ -261,9 +266,12 @@ static const NSTimeInterval sp_joystick_move_hold = 2;
                 self->_virtualController = nil;
                 self->_stickTouch = nil;
                 [self sendValue:CGPointZero];
+                // A physical pad that arrived during the connect was left undecided (sp_physical_pad).
+                if (GCController.controllers.count) [self.superview setNeedsLayout];
                 return;
             }
             sp_stub_log("input: virtual left joystick connected");
+            [self.superview setNeedsLayout];  // as above: decide now which pads are physical
             // The first touch deliberately starts connection after the game is in use. Preserve
             // that held touch, but never revive one lifted/cancelled while the connection was pending.
             UITouch *touch = self->_stickTouch;

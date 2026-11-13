@@ -317,7 +317,8 @@ local function updateDriver(frame, state, expression)
             or alt and expression:find("[mod:alt]3", 1, true) and "3"
             or shift and expression:find("[mod:shift]2", 1, true) and "2" or "0"
     else
-        value = frame.name == "SPTouchBarsDefaultBars" and (specialUI and "show" or "hide") or "show"
+        value = frame.name == "SPTouchBarsDefaultBars" and (specialUI and "show" or "hide")
+            or expression == "hide" and "hide" or "show"
     end
     local before = secure; secure = true
     frame:SetAttribute("state-" .. state, value)
@@ -1009,4 +1010,27 @@ click(SPTouchBarsTabspells); click(SPTouchBarsSpell1); SPTouchBarsEditorSelected
 click(SPTouchBarsEditorUndo)
 check(SPTouchBarsDB.spells[1].size == sessionSize, "reopening the editor creates a fresh Undo baseline")
 click(SPTouchBarsEditorDone)
+-- A physical pad: its first button hides the touch bars and returns the normal ones; a disconnect undoes it.
+local padButtons = {}
+for i = 1, 24 do padButtons[i] = false end
+C_GamePad = {
+    GetAllDeviceIDs = function() return { 1 } end,
+    GetDeviceMappedState = function() return { buttons = padButtons } end,
+}
+local barsHidden = MainActionBar:GetParent() == SPTouchBarsDefaultBars
+padButtons[20] = true; tick()
+check(SPTouchBarsHeader:IsShown(), "a stick direction reported as a button isn't a physical pad")
+padButtons[20] = false; padButtons[5] = true; tick()
+check(not SPTouchBarsHeader:IsShown() and not SPTouchBarsUtilityHeader:IsShown() and not SPTouchBarsControlsHeader:IsShown(),
+      "a pad button hides the touch bars")
+check(MainActionBar:GetParent() == UIParent, "the normal bars return for the pad")
+padButtons[5] = false; tick()
+check(not SPTouchBarsHeader:IsShown(), "the touch bars stay hidden between button presses")
+event("GAME_PAD_DISCONNECTED")
+check(SPTouchBarsHeader:IsShown() and (MainActionBar:GetParent() == SPTouchBarsDefaultBars) == barsHidden,
+      "disconnecting the pad restores the touch bars")
+SlashCmdList.SPTOUCHBARS("pad"); padButtons[5] = true; tick()
+check(SPTouchBarsHeader:IsShown(), "/sptouch pad turns the automatic hiding off")
+SlashCmdList.SPTOUCHBARS("pad"); padButtons[5] = false
+C_GamePad = nil
 print("SPTouchBars: ok (native selection inspector, sliders, safe preview, session Undo, independent appearance/glow, secure empty-slot and bar visibility, map control, transparent arrows, quest steps, manual rewards, press feedback, modifier layers, utility spacing, private assignments, native/pet bars, combat, persistence)")

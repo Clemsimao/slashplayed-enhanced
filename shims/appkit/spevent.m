@@ -685,6 +685,26 @@ static double sp_chord_window(void) {
 #include "spkeys.m"
 #endif
 
+#if !TARGET_OS_VISION
+// Whether a physical game controller is connected: any pad but the touch joystick's own virtual one. The
+// touch controls (joystick, R, the keyboard buttons) hide while one is, and come back when it leaves.
+// While the virtual pad's connect is pending it can't be told from a physical one yet, so the last
+// answer stands and the joystick asks for a new layout once it knows. SP_PAD_TOUCH=1 keeps the touch
+// controls beside a pad.
+static BOOL sp_physical_pad(SPJoystick *joystick) {
+    static BOOL last;
+    if (getenv("SP_PAD_TOUCH")) return NO;
+    if (joystick.connectPending) return last;
+    BOOL physical = NO;
+    GCController *own = joystick.virtualPad;
+    for (GCController *c in GCController.controllers) if (c != own) { physical = YES; break; }
+    if (physical != last)
+        sp_stub_log(physical ? "input: physical controller present, touch controls hidden"
+                             : "input: no physical controller, touch controls shown");
+    return last = physical;
+}
+#endif
+
 @implementation SPInputView {
     NSMutableArray<UITouch *> *_touches;  // the touches down, acting as the mouse
     NSMutableArray<UITouch *> *_chord;    // fingers landed together, pressing nothing until resolved
@@ -755,6 +775,8 @@ static double sp_chord_window(void) {
     [notifications addObserver:self selector:@selector(sp_resume_touch:) name:UISceneDidActivateNotification object:nil];
     [notifications addObserver:self selector:@selector(sp_thumb_preferences:) name:NSUserDefaultsDidChangeNotification object:nil];
     [notifications addObserver:self selector:@selector(sp_game_frame:) name:@"SPGameFirstFrame" object:nil];
+    [notifications addObserver:self selector:@selector(sp_pad_changed:) name:GCControllerDidConnectNotification object:nil];
+    [notifications addObserver:self selector:@selector(sp_pad_changed:) name:GCControllerDidDisconnectNotification object:nil];
 #endif
     if (!getenv("SP_CURSOR_SYSTEM")) [self addInteraction:[[UIPointerInteraction alloc] initWithDelegate:self]];
     [NSNotificationCenter.defaultCenter addObserverForName:UIPointerLockStateDidChangeNotification object:nil queue:nil
@@ -770,9 +792,15 @@ static double sp_chord_window(void) {
 - (void)layoutSubviews {
     [super layoutSubviews];
     CGRect safe = UIEdgeInsetsInsetRect(self.bounds, self.safeAreaInsets);
-    [_thumbButton layoutInRect:CGRectIntersection(safe, sp_game_rect())];
-    [_joystick layoutInRect:CGRectIntersection(safe, sp_game_rect())];
-    for (SPKeyboardButton *button in _keyboardButtons) [button layoutInRect:CGRectIntersection(safe, sp_game_rect())];
+    // No room is how each control hides and lets go of its input: a physical pad takes all of it.
+    CGRect area = sp_physical_pad(_joystick) ? CGRectNull : CGRectIntersection(safe, sp_game_rect());
+    [_thumbButton layoutInRect:area];
+    [_joystick layoutInRect:area];
+    for (SPKeyboardButton *button in _keyboardButtons) [button layoutInRect:area];
+}
+
+- (void)sp_pad_changed:(NSNotification *)notification {
+    dispatch_async(dispatch_get_main_queue(), ^{ [self setNeedsLayout]; });
 }
 
 - (void)sp_thumb_preferences:(NSNotification *)notification {
