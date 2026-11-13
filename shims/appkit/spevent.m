@@ -686,7 +686,8 @@ static double sp_chord_window(void) {
 #endif
 
 #if !TARGET_OS_VISION
-// Whether a physical game controller is connected: any pad but the touch joystick's own virtual one. The
+// Whether a physical game controller is connected: a full gamepad (sticks and face buttons, not a remote
+// or another accessory GameController lists) other than the touch joystick's own virtual one. The
 // touch controls (joystick, R, the keyboard buttons) hide while one is, and come back when it leaves.
 // While the virtual pad's connect is pending it can't be told from a physical one yet, so the last
 // answer stands and the joystick asks for a new layout once it knows. SP_PAD_TOUCH=1 keeps the touch
@@ -697,10 +698,14 @@ static BOOL sp_physical_pad(SPJoystick *joystick) {
     if (joystick.connectPending) return last;
     BOOL physical = NO;
     GCController *own = joystick.virtualPad;
-    for (GCController *c in GCController.controllers) if (c != own) { physical = YES; break; }
-    if (physical != last)
-        sp_stub_log(physical ? "input: physical controller present, touch controls hidden"
-                             : "input: no physical controller, touch controls shown");
+    for (GCController *c in GCController.controllers) if (c != own && c.extendedGamepad) {
+        physical = YES;
+        if (!last)
+            sp_stub_log([NSString stringWithFormat:@"input: physical controller present (%@, %@), touch controls hidden",
+                         c.vendorName, c.productCategory].UTF8String);
+        break;
+    }
+    if (!physical && last) sp_stub_log("input: no physical controller, touch controls shown");
     return last = physical;
 }
 #endif

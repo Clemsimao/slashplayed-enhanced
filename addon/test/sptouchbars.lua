@@ -1017,17 +1017,17 @@ C_GamePad = {
     GetAllDeviceIDs = function() return { 1 } end,
     GetDeviceMappedState = function() return { buttons = padButtons } end,
 }
-local barsHidden = MainActionBar:GetParent() == SPTouchBarsDefaultBars
 padButtons[20] = true; tick()
 check(SPTouchBarsHeader:IsShown(), "a stick direction reported as a button isn't a physical pad")
 padButtons[20] = false; padButtons[5] = true; tick()
 check(not SPTouchBarsHeader:IsShown() and not SPTouchBarsUtilityHeader:IsShown() and not SPTouchBarsControlsHeader:IsShown(),
       "a pad button hides the touch bars")
-check(MainActionBar:GetParent() == UIParent, "the normal bars return for the pad")
+-- This file loads the addon several times, so the parent it returns to is an earlier load's.
+check(MainActionBar:GetParent() ~= SPTouchBarsDefaultBars, "the normal bars return for the pad")
 padButtons[5] = false; tick()
 check(not SPTouchBarsHeader:IsShown(), "the touch bars stay hidden between button presses")
 event("GAME_PAD_DISCONNECTED")
-check(SPTouchBarsHeader:IsShown() and (MainActionBar:GetParent() == SPTouchBarsDefaultBars) == barsHidden,
+check(SPTouchBarsHeader:IsShown() and SPTouchBarsUtilityHeader:IsShown() and SPTouchBarsControlsHeader:IsShown(),
       "disconnecting the pad restores the touch bars")
 SlashCmdList.SPTOUCHBARS("pad"); padButtons[5] = true; tick()
 check(SPTouchBarsHeader:IsShown(), "/sptouch pad turns the automatic hiding off")
