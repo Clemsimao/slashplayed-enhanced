@@ -67,13 +67,18 @@ static void sp_test_tap(SPInputView *view, NSArray<SPTestTouch *> *others) {
 }
 
 static void sp_test_run(SPInputView *view, SPThumbButton *thumb) {
+    // The simulator lists an MFi gamepad of its own, which would hide every touch control under test.
+    setenv("SP_PAD_TOUCH", "1", 1);
     NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
     [defaults removeObjectForKey:sp_thumb_enabled_key];
     [defaults removeObjectForKey:sp_thumb_position_key];
     [defaults removeObjectForKey:sp_thumb_size_key];
     [view setNeedsLayout]; [view layoutIfNeeded];
     [sp_events removeAllObjects];
-    sp_test_check(!thumb.hidden, @"The thumb button is enabled by default.");
+    NSMutableString *pads = [NSMutableString string];
+    for (GCController *c in GCController.controllers)
+        [pads appendFormat:@" [%@ / %@ / extended %d]", c.vendorName, c.productCategory, c.extendedGamepad != nil];
+    sp_test_check(!thumb.hidden, [@"The thumb button is enabled by default. Controllers:" stringByAppendingString:pads]);
     sp_test_check(thumb.bounds.size.width == 76 && thumb.bounds.size.height == 76, @"The default thumb target is larger.");
     sp_test_check([view hitTest:thumb.center withEvent:nil] == thumb, @"The square owns its touch.");
     sp_test_check([view hitTest:CGPointMake(300, 200) withEvent:nil] == view, @"Other touches reach the game.");

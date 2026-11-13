@@ -8,6 +8,10 @@ All notable changes to Slashplayed are documented here. The format is based on
 
 ### Added
 
+- With a game controller connected, the touch controls step aside: the joystick, R, and the keyboard
+  buttons hide, and SPTouchBars hides its bars and returns the normal ones on the controller's first
+  button press. They come back when the controller disconnects. `/sptouch pad` turns the addon's part off.
+
 - Slashplayed Enhanced fork documentation, bringing the iPad interaction and UI improvements together
   with source-build instructions and clear credit to the original project.
 
