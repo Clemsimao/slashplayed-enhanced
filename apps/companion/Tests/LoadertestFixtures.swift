@@ -3,7 +3,7 @@ import XCTest
 /// The loadertest fixtures (research/loadertest, the toy with the client's import shape: an AppKit program
 /// linking the same frameworks), universal like the Mac clients and never committed as a binary. Built
 /// once per test process into a directory of its own, deleted when the test bundle finishes, and shared by
-/// every suite that takes the same one: ClientAssemblyTests, BindCheckTests, and DeviceAssemblyTests all
+/// every suite that takes the same one: ClientAssemblyTests and BindCheckTests both
 /// read `client`, and only ever read it.
 ///
 /// main.m is compiled once per deployment target and each fixture only linked from it: compiling it for
@@ -15,10 +15,14 @@ enum Loadertest {
     /// Like a client, with nothing extra.
     static var client: URL { get throws { try fixture(named: "sploader-macos") } }
 
-    /// Every framework the rewrite map knows, linked into every fixture.
+    /// Every framework the rewrite map knows (its "<Mac install name> -> <device install name>" lines),
+    /// linked into every fixture.
     static var frameworks: [String] {
         get throws {
-            try ClientAssemblyTests.rewriteMap.compactMap { $0.from.firstMatch(of: #/Frameworks/(\w+)\.framework/#).map { String($0.1) } }
+            try String(contentsOf: ClientAssemblyTests.repo.appending(path: "shims/generated/rewrite-map.txt"), encoding: .utf8)
+                .split(separator: "\n").compactMap { line in
+                    line.split(separator: " -> ").first?.firstMatch(of: #/Frameworks/(\w+)\.framework/#).map { String($0.1) }
+                }
         }
     }
 

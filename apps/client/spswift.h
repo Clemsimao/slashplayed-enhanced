@@ -2,10 +2,9 @@
 // bridging header (-import-objc-header), so the Swift screens (spstartscreen.swift, spsettings.swift, spsignin.swift, ...) call the launcher's
 // logic through these C functions; the Objective-C imports it for the Swift side's own C entry points
 // (@_cdecl). The logic stays in Objective-C: the companion's tests compile some of it for the Mac
-// (spsign.m), and the credential rules (CLAUDE.md) are kept where they're already kept (splogin.m,
-// spsign.m). Swift only shows what these return.
+// (spcdn.m), and the credential rules (CLAUDE.md) are kept where they're already kept (splogin.m).
+// Swift only shows what these return.
 #import <UIKit/UIKit.h>
-#import "spsign.h"
 #import "splogo.h"  // the start screen's logo (spstartscreen.swift)
 
 NS_ASSUME_NONNULL_BEGIN
@@ -13,10 +12,11 @@ NS_ASSUME_NONNULL_BEGIN
 // launcher.m
 void sp_launch_say(NSString *s);
 NSString *sp_flavor_name(NSString *flavor);
-// The build a game starts with (Version, Build Key, ...), and whether the device made it. nil without a stamp.
-NSDictionary<NSString *, NSString *> *_Nullable sp_game_build(NSString *flavor, BOOL *updated);
-// Whether the game has an image to start: the app's, or one the device made that the next start would load.
-// NO for a game an app built without images offers to install.
+// The build a game starts with (Version, Build Key, ...): its client's stamp, and where the client came from
+// (*source: "mac", "updated", "installed", or nil). nil without a client.
+NSDictionary<NSString *, NSString *> *_Nullable sp_game_build(NSString *flavor, NSString *_Nullable *_Nonnull source);
+// Whether the device has the game: its client, or game data whose client the next start gets. NO for a game
+// the start screen offers to install.
 BOOL sp_game_has_image(NSString *flavor);
 NSString *sp_game_reset(NSString *flavor);
 // The game's region and languages (spcdn.h's sp_game_region: Region, Text, Speech, Source), and Device "1"
@@ -28,8 +28,34 @@ NSString *sp_game_set_region(NSString *flavor, NSString *region);
 NSArray<NSString *> *sp_regions(void);
 NSString *sp_region_name(NSString *region);
 
-// spjit.m: "iPad", "iPhone", or "Vision Pro".
+// spapple.m. The renewal's word for the start screen (sp_profiles_note: nil when there's nothing to say), when
+// the app stops opening (sp_profile_expiry, nil when it can't tell), and Settings' Forget Apple Token: whether
+// there's a token and forgetting it (a line for the log). Never the token or anything in it.
+NSString *_Nullable sp_profiles_note(void);
+NSDate *_Nullable sp_profile_expiry(void);
+BOOL sp_apple_token_present(void);
+NSString *sp_apple_token_forget(void);
+// spapple.m. Whether the start screen's note offers the Apple sign-in (the last renewal had no token it could
+// use), and the sign-in's screen, to present full screen: `done` gets whether a token was kept, once it's gone.
+BOOL sp_profiles_need_signin(void);
+UIViewController *sp_apple_signin(void (^done)(BOOL signedIn));
+
+// spaddons.m (spaddons.h says more): Settings' Addons pages. Each game's rows and the catalog's addons for it
+// (dictionaries: sp_addons_list's and sp_addons_offered's), its AddOns folder, the catalog's refresh, an
+// action ("install", "update", "remove", "link", "update-all") on the addons' queue, and the "Update Automatically"
+// switch. `done` comes on the main queue, with what went wrong, if anything.
+NSArray<NSDictionary *> *sp_addons_rows(NSString *flavor);
+NSArray<NSDictionary *> *sp_addons_browse(NSString *flavor);
+NSString *sp_addons_folder(NSString *flavor);
+void sp_addons_refresh(NSString *flavor, void (^done)(NSString *_Nullable problem));
+void sp_addons_run(NSString *flavor, NSString *action, NSString *argument, void (^done)(NSString *_Nullable problem));
+BOOL sp_addons_auto(void);
+void sp_addons_set_auto(BOOL on);
+
+// spjit.m: "iPad", "iPhone", or "Vision Pro"; and the relaunch to the start screen (Settings' `relaunch` drill
+// runs it as a game's Exit Game does), which hands it to the JIT helper and returns: the caller then exits.
 NSString *sp_device_noun(void);
+void sp_relaunch(void);
 
 // splogin.m. The email is the one sign-in value that leaves it, for Show Email: never logged.
 BOOL sp_login_saved(void);
@@ -46,16 +72,25 @@ UIBezierPath *sp_logo_s(void);
 NSString *sp_html_text(NSString *html);
 
 // spsettings.swift. The Settings sheet over the start screen, opening in `drill`'s state ($SP_START_DRILL)
-// when one is given; and hiding the email it shows, when a game starts.
+// when one is given, calling `closed` once it's gone; and hiding the email it shows, when a game starts.
 // spsignin.swift. The sign-in screen; splogin.m's `entered` checks and keeps what's typed (nil when it took
 // them, else what to say), and `cancel` gives it Cancel (Settings' Sign In…).
 UIViewController *sp_signin_screen(NSString *noun, NSString *_Nullable (^entered)(NSString *email, NSString *password),
                                    void (^_Nullable cancel)(void));
+// spapplescreen.swift. The Apple sign-in's screen; spapple.m's blocks run it: `begin` with what's typed (nil
+// when it took them, else what to say), `answer` with a 2FA answer ("code", "sms" with a number's id,
+// "devices", "resend"), `cancel` and `finish` to close it. sp_apple_screen_show gives it the next step.
+UIViewController *sp_apple_screen(NSString *noun, NSString *server,
+                                  NSString *_Nullable (^begin)(NSString *email, NSString *password, NSString *server),
+                                  void (^answer)(NSString *kind, NSInteger number, NSString *code), void (^cancel)(void),
+                                  void (^finish)(void));
+void sp_apple_screen_show(UIViewController *screen, NSDictionary *step);
 // sppairscreen.swift, spvpnscreen.swift, spstyle.swift: the waiting screens (sppair.m's, spvpn.m's) and
 // their status line.
 UIViewController *sp_pair_screen(NSString *_Nullable (^send)(NSString *code), void (^renew)(void));
 void sp_pair_ask(UIViewController *screen, BOOL ask);
 UIViewController *sp_vpn_screen(NSString *noun, void (^turnOn)(void));
+void sp_vpn_refused(UIViewController *screen, BOOL refused);
 void sp_screen_status(UIViewController *screen, NSString *text);
 // sppatchscreen.swift: the newer-build screen (sppatch.m's). `choose` gets the index of the button tapped;
 // sp_patch_show sets what it says (no buttons: a spinner) and clears the status line.
@@ -69,7 +104,7 @@ void sp_patch_show(UIViewController *screen, NSString *heading, NSString *messag
 UIViewController *sp_start_screen(NSArray<NSString *> *flavors, NSArray<NSString *> *installable, void (^pick)(NSString *flavor));
 void sp_start_settings(UIViewController *screen, NSString *drill);
 
-UIViewController *sp_settings_sheet(NSArray<NSString *> *flavors, NSString *_Nullable drill);
+UIViewController *sp_settings_sheet(NSArray<NSString *> *flavors, NSString *_Nullable drill, void (^closed)(void));
 void sp_settings_hide_email(void);
 
 NS_ASSUME_NONNULL_END

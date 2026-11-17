@@ -37,44 +37,37 @@ final class OnboardingTests: XCTestCase {
     func testSupportedIPads() {
         for model in ["iPad14,5", "iPad14,9", "iPad16,3", "iPad15,4", "iPad17,1"] {
             XCTAssertTrue(Device.isSupportedIPad(model: model), model)
-            XCTAssertFalse(Device.isUntestedIPad(model: model), model)
+            XCTAssertFalse(Device.isM1IPad(model: model), model)
         }
         // Under 8 GB: Air 4 and the 10th generation (A14), mini 6 (A15), the 11th generation (A16). And the
         // 2018 Pro (A12X), short of the M1's instruction set.
         for model in ["iPad13,1", "iPad13,2", "iPad13,18", "iPad13,19", "iPad14,1", "iPad14,2", "iPad15,7", "iPad15,8", "iPad8,1"] {
             XCTAssertFalse(Device.isSupportedIPad(model: model), model)
-            XCTAssertFalse(Device.isUntestedIPad(model: model), model)
+            XCTAssertFalse(Device.isM1IPad(model: model), model)
         }
         XCTAssertTrue(Device.isSupportedIPad(model: nil))
-        XCTAssertFalse(Device.isUntestedIPad(model: nil))
+        XCTAssertFalse(Device.isM1IPad(model: nil))
     }
 
-    func testM1IPadsAllowedButUntested() {
+    func testM1IPadsAndTheA17ProMiniAllowed() {
         // The 11-inch 3rd-generation Pro, the 12.9-inch 5th-generation Pro, and the 5th-generation Air.
         let m1 = ["iPad13,4", "iPad13,5", "iPad13,6", "iPad13,7", "iPad13,8", "iPad13,9", "iPad13,10", "iPad13,11",
                   "iPad13,16", "iPad13,17"]
         let iPad = Device(name: "", udid: "", kind: .iPad)
         for model in m1 {
             XCTAssertTrue(Device.isSupportedIPad(model: model), model)
-            XCTAssertTrue(Device.isUntestedIPad(model: model), model)
+            XCTAssertTrue(Device.isM1IPad(model: model), model)
             XCTAssertNil(iPad.unsupportedReason(model: model), model)
-            XCTAssertNotNil(iPad.untestedNote(model: model), model)
         }
         // The A14 iPads numbered among them stay refused.
         for model in ["iPad13,1", "iPad13,2", "iPad13,18", "iPad13,19"] {
             XCTAssertFalse(Device.isSupportedIPad(model: model), model)
         }
-        // The A17 Pro mini 7 (8 GB, the iPhone 15 Pro's chip) is allowed, untested, and named as itself.
+        // The A17 Pro mini 7 (8 GB, the iPhone 15 Pro's chip) is allowed.
         for model in ["iPad16,1", "iPad16,2"] {
             XCTAssertTrue(Device.isSupportedIPad(model: model), model)
-            XCTAssertTrue(Device.isUntestedIPad(model: model), model)
             XCTAssertNil(iPad.unsupportedReason(model: model), model)
-            XCTAssertEqual(iPad.untestedNote(model: model)?.contains("the A17 Pro iPad mini"), true, model)
         }
-        XCTAssertEqual(iPad.untestedNote(model: "iPad13,16")?.contains("an M1 iPad"), true)
-        XCTAssertNil(iPad.untestedNote(model: "iPad14,5"))
-        XCTAssertNil(iPad.untestedNote(model: nil))
-        XCTAssertNil(Device(name: "", udid: "", kind: .iPhone).untestedNote(model: "iPad13,16"))
     }
 
     func testSupportedIPhones() {
@@ -171,7 +164,7 @@ final class OnboardingTests: XCTestCase {
         XCTAssertEqual(SetupStatus.firstInstall([("iPad", .olderBuild), ("iPhone", .upToDate)]), .ok("Slashplayed is on iPhone."))
         XCTAssertEqual(SetupStatus.firstInstall([("Vision Pro", .upToDate), ("iPad", .upToDate), ("iPhone", .upToDate)]),
                        .ok("Slashplayed is on Vision Pro, iPad, and iPhone."))
-        XCTAssertEqual(SetupStatus.firstInstall([("Vision Pro", .otherGames), ("iPad", .notOnDevice), ("iPhone", .replaced)]),
+        XCTAssertEqual(SetupStatus.firstInstall([("Vision Pro", .olderBuild), ("iPad", .notOnDevice), ("iPhone", .replaced)]),
                        .problem("Slashplayed on Vision Pro and iPhone needs an update", "Press Update for the device you'll play on."))
     }
 
@@ -190,9 +183,8 @@ final class OnboardingTests: XCTestCase {
         XCTAssertEqual(button(.notFromThisMac), "Install")
         XCTAssertEqual(state(.olderBuild), "Installed, needs an update")
         XCTAssertEqual(state(.olderBuild, "Put on the headset first."), "Installed, needs an update. Put on the headset first.")
-        XCTAssertEqual(state(.otherGames), "Installed, needs an update for the games you chose")
         XCTAssertEqual(state(.replaced), "Installed from another Mac or Xcode, needs an update")
-        for need in [ClientBuild.InstallNeed.olderBuild, .otherGames, .replaced] {
+        for need in [ClientBuild.InstallNeed.olderBuild, .replaced] {
             XCTAssertEqual(button(need), "Update", "\(need)")
         }
         XCTAssertEqual(SetupStatus.logName(.olderBuild), "an earlier build")
@@ -212,25 +204,20 @@ final class OnboardingTests: XCTestCase {
         XCTAssertEqual(SetupStatus.count(141, "old index file"), "141 old index files")
     }
 
-    /// Stop Using It names one device in the singular: "Paul's Apple Vision Pro delete their copies" (rc9).
-    func testStopUsingItAgreesWithItsDevices() {
-        XCTAssertEqual(SlashplayedCertificate.deletedLine(sentTo: []), "deleted the Slashplayed certificate and its key from this Mac")
-        XCTAssertEqual(SlashplayedCertificate.deletedLine(sentTo: ["Vision Pro"]),
-                       "deleted the Slashplayed certificate and its key from this Mac; Vision Pro deletes its copy at its next Play or Update Client")
-        XCTAssertEqual(SlashplayedCertificate.deletedLine(sentTo: ["Vision Pro", "iPad"]),
-                       "deleted the Slashplayed certificate and its key from this Mac; Vision Pro and iPad delete their copies at their next Play or Update Client")
-    }
-
     /// Retail on an iPad or iPhone: space is only warned about when the device is short of it, by the free
     /// space the companion shows (a 1 TB iPhone with 810 GB free was told it was more than most have).
     func testRetailNoteGoesByFreeSpace() {
-        XCTAssertEqual(Flavor.retailNote(noun: "iPhone", free: FreeSpace(bytes: 810_790_000_000)), "Retail has been played on an iPhone 16 Pro.")
+        XCTAssertNil(Flavor.retailNote(noun: "iPhone", free: FreeSpace(bytes: 810_790_000_000)))
+        XCTAssertNil(Flavor.retailNote(noun: "iPad", free: FreeSpace(bytes: 810_790_000_000)))
         let free = ByteCountFormatter.string(fromByteCount: 120_000_000_000, countStyle: .file)
+        XCTAssertEqual(Flavor.retailNote(noun: "iPhone", free: FreeSpace(bytes: 120_000_000_000)),
+                       "Retail can take about 150 GB, and the iPhone has \(free) free.")
         XCTAssertEqual(Flavor.retailNote(noun: "iPad", free: FreeSpace(bytes: 120_000_000_000)),
-                       "Retail can take about 150 GB, and the iPad has \(free) free. Retail runs hot on an iPad, near its memory limit.")
+                       "Retail can take about 150 GB, and the iPad has \(free) free.")
         XCTAssertEqual(Flavor.retailNote(noun: "iPad", free: FreeSpace(bytes: 120_000_000_000, atLeast: true)),
-                       "Retail can take about 150 GB, and the iPad has at least \(free) free. Retail runs hot on an iPad, near its memory limit.")
-        XCTAssertTrue(Flavor.retailNote(noun: "iPad", free: nil).contains("free space isn't known yet"))
+                       "Retail can take about 150 GB, and the iPad has at least \(free) free.")
+        XCTAssertEqual(Flavor.retailNote(noun: "iPad", free: nil),
+                       "Retail can take about 150 GB; the iPad's free space isn't known yet.")
     }
 
     /// The launcher's spfree.txt: rc10's two lines (Settings' figure, then free outright), an older

@@ -1,23 +1,18 @@
-// libspSystem: the client's libSystem on visionOS. Re-exports the real libSystem and adds what the
+// libspSystem: the client's libSystem on visionOS and iOS. Re-exports the real libSystem and adds what the
 // client needs to rewrite its own code at startup under TXM: the shim services that through an alias
 // mapping (research/jittest).
 //
 // The client looks up its memory functions for that rewrite with dlsym(RTLD_DEFAULT, ...). This dlsym:
 // - returns NULL for pthread_jit_write_protect_np (no MAP_JIT here), so the client falls back to
 //   mprotect and memcpy. The symbol is still exported, because the client also binds it directly.
-// - hands out sp_mprotect and sp_memcpy, which turn that into the pattern proven on device:
-//   a debugger prepares the image's own __TEXT once (pages stay r-x, max rwx), the debugger detaches,
-//   and every write goes through an RW alias made with vm_remap. __TEXT is never writable in place,
-//   which would kill execute for good.
+// - hands out sp_mprotect and sp_memcpy, which turn that into the pattern proven on device: a debugger
+//   prepares the client's __TEXT once (pages stay r-x, max rwx), the debugger detaches, and every write
+//   goes through an RW alias made with vm_remap. __TEXT is never writable in place, which would kill
+//   execute for good.
 //
-// The first sp_mprotect(rwx) inside the main executable's __TEXT prepares all of __TEXT in one
-// debugger stop and detaches straight away (alias writes still work after detach). Contents are copied
-// aside first and put back through the alias, so the debugger may write anything (zeros: jit.py
-// bulkz, the fastest). Later mprotects inside __TEXT just return 0.
-//
-// Debugger protocol (StikDebug-compatible, serviced by research/jittest/jit.py): brk #0xf00d, x16 = 1
-// prepares x0..x0+x1 (x2 = the first byte of each page, for debuggers that write those back);
-// x16 = 0 detaches. A brk without a debugger kills the process, so check P_TRACED first.
+// The launcher's loader (apps/client/spguest.c, spguestlaunch.m) does the prepare, in one stop of the
+// on-device JIT helper's before it copies __TEXT in, and names the client and its alias here
+// (sp_set_client), so mprotects inside __TEXT just return 0 and memcpys into it go through the alias.
 #include <dirent.h>
 #include <dispatch/dispatch.h>
 #include <dlfcn.h>
@@ -25,7 +20,6 @@
 #include <limits.h>
 #include <errno.h>
 #include <fcntl.h>
-#include <libkern/OSCacheControl.h>
 #include <mach-o/dyld.h>
 #include <mach-o/loader.h>
 #include <mach/mach.h>
@@ -71,38 +65,50 @@ static void vlog(const char *fmt, ...) {
     write(2, buf, n);
 }
 
-// The client's __TEXT, and its RW alias once prepared. The client is the main executable, or, under
-// the flavor launcher (apps/client/launcher.m), an executable retyped MH_BUNDLE that it dlopens.
+// The client's __TEXT, and the RW alias it was copied in through. The client is the game's unchanged
+// executable, which the launcher's loader maps itself (apps/client/spguest.c): dyld never lists it, so the
+// loader says where it is (sp_set_client), with __TEXT already prepared by the on-device JIT helper.
 static uintptr_t text, text_len, text_w;
 static int tracing;  // SP_SYSTEM_TRACE=1
 
-static int find_text(const struct mach_header *h, intptr_t slide, int bundle_only) {
+static void find_text(const struct mach_header *h, intptr_t slide) {
     const struct mach_header_64 *mh = (const void *)h;
-    if (bundle_only && mh->filetype != MH_BUNDLE) return 0;
-    uintptr_t t = 0, len = 0;
-    int has_main = 0;
     const struct load_command *lc = (const void *)(mh + 1);
     for (uint32_t i = 0; i < mh->ncmds; i++, lc = (const void *)((const char *)lc + lc->cmdsize)) {
         const struct segment_command_64 *seg = (const void *)lc;
         if (lc->cmd == LC_SEGMENT_64 && !strcmp(seg->segname, "__TEXT")) {
-            t = seg->vmaddr + slide;
-            len = seg->vmsize;
+            text = seg->vmaddr + slide;
+            text_len = seg->vmsize;
         }
-        has_main |= lc->cmd == LC_MAIN;
     }
-    if (bundle_only && !has_main) return 0;
-    text = t;
-    text_len = len;
-    return 1;
-}
-
-// dyld calls this before the image's initializers, so the client's startup mprotects see the right __TEXT.
-static void image_added(const struct mach_header *h, intptr_t slide) {
-    if (find_text(h, slide, 1)) vlog("client image %p, __TEXT %p+0x%lx\n", (void *)h, (void *)text, text_len);
 }
 
 // For the other shims' caller offsets.
 __attribute__((visibility("default"))) uintptr_t sp_client_text(void) { return text; }
+
+// The client, from the loader that maps it (apps/client/spguest.c), before its first call into a shim. Its
+// __TEXT was prepared before the loader copied it in, and `alias` is the RW alias it copied through, so
+// sp_mprotect has nothing to prepare and sp_memcpy writes there.
+static const char *client_name;  // for crash reports, which list only dyld's images otherwise
+__attribute__((visibility("default"))) void sp_set_client(const struct mach_header *h, intptr_t slide, const char *name,
+                                                          uintptr_t alias) {
+    find_text(h, slide);
+    text_w = alias;
+    client_name = name;
+    vlog("client image %p (not dyld's), __TEXT %p+0x%lx, alias %p\n", (void *)h, (void *)text, text_len, (void *)alias);
+}
+
+// dladdr that also knows that client: dyld's dladdr has no image for its frames, so stall stacks, crash
+// lines, and exception backtraces showed them as bare addresses. Named by its file, offset from its header
+// (__TEXT's start), as dyld names a dlopened client (wow-<flavor>+0x...). The other shims link the real
+// libSystem, so they look this up with dlsym and fall back to dladdr.
+__attribute__((visibility("default"))) int sp_dladdr(const void *addr, Dl_info *info) {
+    if (client_name && (uintptr_t)addr - text < text_len) {
+        *info = (Dl_info){.dli_fname = client_name, .dli_fbase = (void *)text};
+        return 1;
+    }
+    return dladdr(addr, info);
+}
 
 static int in_text(uintptr_t a, size_t len) { return a >= text && len <= text_len && a - text <= text_len - len; }
 
@@ -111,74 +117,6 @@ static int traced(void) {
     size_t len = sizeof kp;
     int mib[4] = {CTL_KERN, KERN_PROC, KERN_PROC_PID, getpid()};
     return sysctl(mib, 4, &kp, &len, NULL, 0) == 0 && (kp.kp_proc.p_flag & P_TRACED);
-}
-
-__attribute__((noinline)) static uintptr_t jit_cmd(uintptr_t cmd, uintptr_t a, uintptr_t b, uintptr_t c) {
-    register uintptr_t x0 __asm__("x0") = a;
-    register uintptr_t x1 __asm__("x1") = b;
-    register uintptr_t x2 __asm__("x2") = c;
-    register uintptr_t x16 __asm__("x16") = cmd;
-    __asm__ volatile("brk #0xf00d" : "+r"(x0) : "r"(x1), "r"(x2), "r"(x16) : "memory");
-    return x0;
-}
-
-// Prepares all of __TEXT, detaches, and maps the RW alias. Returns 0 or an errno value.
-static int prepare_text(void) {
-#if TARGET_OS_OSX
-    // Mac test only: SP_SYSTEM_NO_DEBUGGER=1 skips the debugger prepare. macOS allows the RW alias of
-    // __TEXT without it (no TXM; needs a copy without hardened runtime).
-    int skip = getenv("SP_SYSTEM_NO_DEBUGGER") != NULL;
-#else
-    int skip = 0;
-#endif
-    // Wait (up to 60 s) for the debugger to attach here rather than at launch: a debugger attached
-    // during dyld's startup stops on every image load, which costs ~70 s over Wi-Fi.
-    if (!skip && !traced()) {
-        vlog("waiting for a debugger\n");
-        for (int ms = 0; !traced() && ms < 60000; ms += 10) usleep(10000);
-    }
-    if (!skip && !traced()) {
-        vlog("__TEXT %p+0x%lx needs preparing, but no debugger is attached. Launch under one that "
-             "services brk #0xf00d (research/jittest/jit.py, StikDebug)\n", (void *)text, text_len);
-        return EACCES;
-    }
-    // Copy the contents aside: the debugger's writes may change them (bulkz zeroes everything).
-    void *orig = mmap(NULL, text_len, PROT_READ | PROT_WRITE, MAP_ANON | MAP_PRIVATE, -1, 0);
-    unsigned char *firsts = malloc(text_len / PAGE);
-    if (orig == MAP_FAILED || !firsts) return ENOMEM;
-    memcpy(orig, (void *)text, text_len);
-    for (size_t i = 0; i < text_len / PAGE; i++) firsts[i] = ((unsigned char *)text)[i * PAGE];
-
-    if (!skip) {
-        vlog("preparing __TEXT %p+0x%lx (%lu pages)\n", (void *)text, text_len, text_len / PAGE);
-        uintptr_t r = jit_cmd(1, text, text_len, (uintptr_t)firsts);
-        if (r != text) {
-            vlog("prepare returned %p, wanted %p\n", (void *)r, (void *)text);
-            return EACCES;
-        }
-        jit_cmd(0, 0, 0, 0);
-        // The debugger finishes detaching after we resume; wait for it (up to 5 s) so nothing after
-        // this runs while still traced.
-        for (int ms = 0; traced() && ms < 5000; ms += 10) usleep(10000);
-        vlog("detached (traced=%d)\n", traced());
-    }
-    free(firsts);
-
-    vm_address_t w = 0;
-    vm_prot_t cur, max;
-    kern_return_t kr = vm_remap(mach_task_self(), &w, text_len, 0, VM_FLAGS_ANYWHERE, mach_task_self(), text, FALSE,
-                                &cur, &max, VM_INHERIT_NONE);
-    if (!kr) kr = vm_protect(mach_task_self(), w, text_len, FALSE, VM_PROT_READ | VM_PROT_WRITE);
-    if (kr) {
-        vlog("RW alias of __TEXT failed: %s\n", mach_error_string(kr));
-        return EACCES;
-    }
-    memcpy((void *)w, orig, text_len);
-    munmap(orig, text_len);
-    sys_icache_invalidate((void *)text, text_len);
-    text_w = w;
-    vlog("__TEXT alias at %p, contents restored\n", (void *)w);
-    return 0;
 }
 
 static unsigned long long fnv(const void *p, size_t len) {
@@ -191,12 +129,11 @@ static unsigned long long fnv(const void *p, size_t len) {
 // Handed out by dlsym as "mprotect".
 static int sp_mprotect(void *addr, size_t len, int prot) {
     if (!in_text((uintptr_t)addr, len)) return mprotect(addr, len, prot);
+    // No alias: the loader didn't name the client (sp_set_client), so there's nothing to write through.
     if (prot & PROT_WRITE && !text_w) {
-        int e = prepare_text();
-        if (e) {
-            errno = e;
-            return -1;
-        }
+        vlog("mprotect(%p, 0x%zx) for writing in __TEXT, but no alias: refused\n", addr, len);
+        errno = EACCES;
+        return -1;
     }
     // __TEXT stays r-x; writes go through the alias (sp_memcpy).
     vlog("mprotect(%p, 0x%zx, %c%c%c) in __TEXT: no-op\n", addr, len, prot & PROT_READ ? 'r' : '-',
@@ -399,9 +336,15 @@ static const char *agent_redirect(const char *p) {
 // relative open after chdir counts too. Its contents are never read here, and nothing about them (not even
 // the size) is logged. A signal or SIGKILL ends the process with no exit to hook: the launcher deletes any
 // leftover, every game's, at its next start (sp_login_clear).
+//
+// Once deleted, each time the client looks for it again is logged too (opens, failed ones included, and
+// stat and access, with their *at forms): the client was seen to open it once per launch, but only on
+// logins without a captcha, and a captcha that fails even when answered right (BLZ51914400) is what an
+// emptied file gave (docs/research.md). Only the call, how long after the delete, and its result.
 static char login_txt[PATH_MAX];  // the real path of <install root>/login.txt, once redirecting
 static _Atomic int login_fd = -1;
 static FILE *_Atomic login_file;
+static _Atomic uint64_t login_deleted_at;  // CLOCK_UPTIME_RAW ns of the shim's delete; 0 before it
 // Set while a delete is under way or done, so the close and the exits after it don't zero or unlink twice
 // (and log once). Cleared again when a delete fails, so a later exit tries again.
 static atomic_flag login_done = ATOMIC_FLAG_INIT;
@@ -413,6 +356,7 @@ static int (*login_open)(const char *, int, ...);
 static ssize_t (*login_write)(int, const void *, size_t);
 static int (*login_close)(int);
 static int (*login_unlink)(const char *);
+static char *(*login_realpath)(const char *, char *);
 
 static void login_at_exit(void);
 
@@ -424,7 +368,8 @@ static void login_at_exit(void);
 // of the client's C++ destructors crashing at exit can't skip it.
 static void login_setup(void) {
     char root[PATH_MAX];
-    if (!((char *(*)(const char *, char *))real("realpath$DARWIN_EXTSN"))(to, root)) return;
+    login_realpath = real("realpath$DARWIN_EXTSN");
+    if (!login_realpath(to, root)) return;
     login_open = real("open");
     login_write = real("write");
     login_close = real("close");
@@ -449,7 +394,10 @@ static int login_scrub(void) {
         }
         login_close(fd);
     }
-    if (login_unlink(login_txt) == 0) return 0;
+    if (login_unlink(login_txt) == 0) {
+        login_deleted_at = clock_gettime_nsec_np(CLOCK_UPTIME_RAW);  // a commpage read: fine in crash_end
+        return 0;
+    }
     int e = errno;
     if (e != ENOENT) atomic_flag_clear(&login_done);
     return e;
@@ -463,7 +411,55 @@ static int is_login(const char *path, int fd) {
     return ((int (*)(int, int, ...))real("fcntl"))(fd, F_GETPATH, p) == 0 && !strcmp(p, login_txt);
 }
 
-static void login_opened(const char *how) { vlog("login.txt: the client opened it (%s)\n", how); }
+static double login_since_delete(void) {
+    return (double)(clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - login_deleted_at) / 1e9;
+}
+
+static void login_opened(const char *how) {
+    if (login_deleted_at) vlog("login.txt: the client opened it again (%s), %.1f s after the delete\n", how, login_since_delete());
+    else vlog("login.txt: the client opened it (%s)\n", how);
+}
+
+// Whether `path`, relative to `dirfd` as the *at calls take it, names the install root's login.txt. The
+// file is gone, so there's no F_GETPATH of it (is_login): its folder is resolved instead, which a relative
+// path after chdir needs too.
+static int login_names(int dirfd, const char *path) {
+    const char *base = strrchr(path, '/');
+    if (strcmp(base ? base + 1 : path, "login.txt")) return 0;
+    char dir[PATH_MAX], real_dir[PATH_MAX], p[PATH_MAX];
+    size_t len = 0, n = base ? (size_t)(base - path) : 0;
+    if (path[0] != '/' && dirfd != AT_FDCWD) {
+        if (((int (*)(int, int, ...))real("fcntl"))(dirfd, F_GETPATH, dir)) return 0;
+        len = strlen(dir);
+        dir[len++] = '/';
+    }
+    if (len + n + 2 > sizeof dir) return 0;
+    memcpy(dir + len, path, n);
+    len += n;
+    if (!n) dir[len++] = base ? '/' : '.';  // "/login.txt" or "login.txt"
+    dir[len] = 0;
+    return login_realpath(dir, real_dir) && snprintf(p, sizeof p, "%s/login.txt", real_dir) > 0 && !strcmp(p, login_txt);
+}
+
+// After the delete, each time the client looks for the file again: a failed open or fopen (a successful
+// one is login_opened's), and stat, access, fstatat, and faccessat whatever they answer, so a repro with
+// none of these lines shows the client never looked. `found`: the call succeeded; `e`: its errno, which
+// the caller has again afterwards. The first 20 only, should the client poll for it.
+static void login_again(int dirfd, const char *path, const char *how, int found, int e) {
+    if (login_deleted_at && path && login_names(dirfd, path)) {
+        static _Atomic int logged;
+        int k = logged++;
+        if (k < 20 && found)
+            vlog("login.txt: the client looked for it again (%s), %.1f s after the delete: there\n", how,
+                 login_since_delete());
+        else if (k < 20)
+            vlog("login.txt: the client looked for it again (%s), %.1f s after the delete: %s (errno %d)\n", how,
+                 login_since_delete(), strerror(e), e);
+        else if (k == 20)
+            vlog("login.txt: the client keeps looking for it; no more of those logged\n");
+    }
+    errno = e;
+}
 
 static void login_closed(void) {
     int e = login_scrub();
@@ -501,6 +497,8 @@ int sp_open(const char *path, int flags, ...) {
     if (is_login(path, r)) {
         login_fd = r;
         login_opened("open");
+    } else if (r < 0) {
+        login_again(AT_FDCWD, path, "open", 0, errno);
     }
     return r;
 }
@@ -516,6 +514,8 @@ int sp_open(const char *path, int flags, ...) {
         if (r && is_login(path, fileno(r))) { \
             login_file = r; \
             login_opened("fopen"); \
+        } else if (!r) { \
+            login_again(AT_FDCWD, path, "fopen", 0, errno); \
         } \
         return r; \
     }
@@ -532,8 +532,9 @@ int sp_fclose(FILE *f) {
     return r;
 }
 
-// Calls taking one path and returning int. ARGS: the parameters after the path; CALL: those names.
-#define PATH_CALL(name, ARGS, CALL, fmt, ...) \
+// Calls taking one path and returning int. LOOKS: 1 for a call that looks for a file (login_again); ARGS:
+// the parameters after the path; CALL: those names.
+#define PATH_CALL(name, LOOKS, ARGS, CALL, fmt, ...) \
     int sp_##name(const char *p ARGS) __asm__("_" #name); \
     int sp_##name(const char *p ARGS) { \
         REAL(int (*)(const char *p ARGS), #name); \
@@ -541,15 +542,34 @@ int sp_fclose(FILE *f) {
         p = redirect(p, b); \
         int r = fn(p CALL); \
         TRACE(#name "(\"%s\"" fmt ") = %d %s", p, ##__VA_ARGS__, r, ERR(r < 0)); \
+        if (LOOKS) login_again(AT_FDCWD, p, #name, r == 0, errno); \
         return r; \
     }
 #define COMMA ,
-PATH_CALL(mkdir, COMMA mode_t m, COMMA m, ", 0%o", m)
-PATH_CALL(stat, COMMA struct stat *st, COMMA st, "")
-PATH_CALL(access, COMMA int m, COMMA m, ", %d", m)
-PATH_CALL(chdir, , , "")
-PATH_CALL(unlink, , , "")
-PATH_CALL(rmdir, , , "")
+PATH_CALL(mkdir, 0, COMMA mode_t m, COMMA m, ", 0%o", m)
+PATH_CALL(stat, 1, COMMA struct stat *st, COMMA st, "")
+PATH_CALL(access, 1, COMMA int m, COMMA m, ", %d", m)
+PATH_CALL(chdir, 0, , , "")
+PATH_CALL(unlink, 0, , , "")
+PATH_CALL(rmdir, 0, , , "")
+
+// fstatat and faccessat only pass through, unredirected, as they did when the re-export answered them:
+// they're here for login_again alone. The redirect is for the comparison, and only once the file is
+// deleted, so these never set up the redirect before the client's first redirected call does.
+#define AT_CALL(name, ARGS, CALL) \
+    int sp_##name(int fd, const char *p ARGS, int flag) __asm__("_" #name); \
+    int sp_##name(int fd, const char *p ARGS, int flag) { \
+        REAL(int (*)(int, const char *p ARGS, int), #name); \
+        int r = fn(fd, p CALL, flag); \
+        if (login_deleted_at && p) { \
+            int e = errno; \
+            char b[PATH_MAX]; \
+            login_again(fd, redirect(p, b), #name, r == 0, e); \
+        } \
+        return r; \
+    }
+AT_CALL(fstatat, COMMA struct stat *st, COMMA st)
+AT_CALL(faccessat, COMMA int m, COMMA m)
 
 int sp_rename(const char *a, const char *b) __asm__("_rename");
 int sp_rename(const char *a, const char *b) {
@@ -701,7 +721,7 @@ static struct sigaction client_act[NSIG];
 
 static void log_frame(int i, uintptr_t pc) {
     Dl_info info;
-    if (dladdr((void *)pc, &info) && info.dli_fname)
+    if (sp_dladdr((void *)pc, &info) && info.dli_fname)
         vlog("    %2d %s+0x%lx (%s)\n", i, strrchr(info.dli_fname, '/') + 1, pc - (uintptr_t)info.dli_fbase,
              info.dli_sname ? info.dli_sname : "?");
     else
@@ -1212,6 +1232,11 @@ kern_return_t sp_task_threads(task_t task, thread_act_array_t *list, mach_msg_ty
             if (name && image_text(_dyld_get_image_header(k), &crash_images[crash_nimages].start, &crash_images[crash_nimages].len))
                 crash_images[crash_nimages++].name = name;
         }
+        if (client_name && crash_nimages < CRASH_IMAGES) {
+            crash_images[crash_nimages].start = text;
+            crash_images[crash_nimages].len = text_len;
+            crash_images[crash_nimages++].name = client_name;
+        }
         crash_say("[sp:System] crash: the client's exception handler (+0x%lx) is running; %u threads:\n", CALLER, *count);
         if (n > CRASH_IMAGES) crash_say("[sp:System] crash: only the first %u of %u images are listed\n", CRASH_IMAGES, n);
         for (mach_msg_type_number_t i = 0; i < *count; i++) {
@@ -1255,7 +1280,7 @@ static void *log_exception(void *exc) {
     int n = backtrace(pcs, 16);
     for (int i = 1; i < n; i++) {
         Dl_info info;
-        if (dladdr(pcs[i], &info) && info.dli_fname)
+        if (sp_dladdr(pcs[i], &info) && info.dli_fname)
             vlog("    %2d %s+0x%lx %s\n", i, strrchr(info.dli_fname, '/') + 1,
                  (unsigned long)((char *)pcs[i] - (char *)info.dli_fbase), info.dli_sname ? info.dli_sname : "");
         else
@@ -1293,9 +1318,31 @@ static void *console_tee(void *pipe_fd) {
     }
 }
 
+// Builds before this one had the AppKit shim log every key with what it typed (spevent.m's sp_post), so
+// their logs can hold a password typed into the game's login form. The first start of a build that
+// leaves typed text out deletes every one of them, once, before the rotation, so this launch's own log is
+// the only one left. Library/spconsole-cleared marks it done, created exclusively before anything is
+// deleted: a later start finds it and deletes nothing, and a start that can't create it deletes nothing
+// either, so this build's own logs are never deleted. The number deleted, or -1 when nothing was tried.
+static int console_clear_old(void) {
+    char path[PATH_MAX];
+    snprintf(path, sizeof path, "%s/Library/spconsole-cleared", getenv("HOME"));
+    int mark = ((int (*)(const char *, int, ...))real("open"))(path, O_WRONLY | O_CREAT | O_EXCL, 0644);
+    if (mark < 0) return -1;
+    close(mark);
+    int (*unlink_fn)(const char *) = real("unlink");
+    int n = 0;
+    for (int i = 0; i <= 5; i++) {
+        snprintf(path, sizeof path, i ? "%s/Documents/spconsole.%d.log" : "%s/Documents/spconsole.log", getenv("HOME"), i);
+        if (unlink_fn(path) == 0) n++;
+    }
+    return n;
+}
+
 static void console_tee_start(void) {
     char path[PATH_MAX];
     char from[PATH_MAX];
+    int cleared = console_clear_old();
     for (int i = 4; i >= 0; i--) {
         snprintf(from, sizeof from, i ? "%s/Documents/spconsole.%d.log" : "%s/Documents/spconsole.log", getenv("HOME"), i);
         snprintf(path, sizeof path, "%s/Documents/spconsole.%d.log", getenv("HOME"), i + 1);
@@ -1311,6 +1358,7 @@ static void console_tee_start(void) {
     pthread_t t;
     pthread_create(&t, NULL, console_tee, (void *)(intptr_t)fds[0]);
     pthread_detach(t);
+    if (cleared >= 0) vlog("console: deleted %d log(s) from before typed keys were left out\n", cleared);
 }
 
 // Logs the app's memory footprint (what jetsam counts) and what's left before its limit, every
@@ -1362,9 +1410,7 @@ __attribute__((constructor)) static void sp_init(void) {
     const void *offsets = dispatch ? sp_real_dlsym(dispatch, "dispatch_queue_offsets") : NULL;
     if (offsets) memcpy(dispatch_queue_offsets, offsets, sizeof dispatch_queue_offsets);
     tracing = getenv("SP_SYSTEM_TRACE") != NULL;
-    find_text(_dyld_get_image_header(0), _dyld_get_image_vmaddr_slide(0), 0);
-    vlog("loaded: main __TEXT %p+0x%lx, traced=%d\n", (void *)text, text_len, traced());
-    _dyld_register_func_for_add_image(image_added);
+    vlog("loaded, traced=%d\n", traced());
     if (tracing) {
         void *objc = dlopen("/usr/lib/libobjc.A.dylib", RTLD_NOLOAD | RTLD_LAZY);
         objc_preprocessor (*set)(objc_preprocessor) = objc ? sp_real_dlsym(objc, "objc_setExceptionPreprocessor") : NULL;

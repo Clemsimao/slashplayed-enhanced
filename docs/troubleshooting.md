@@ -68,7 +68,13 @@ free teams the `extended-virtual-addressing` entitlement, so the companion leave
 
 - **The signature lasts 7 days.** After that the device won't open Slashplayed. Within two days of
   that, the main window warns and offers **Rebuild Now**, and **Play** signs the app again on its
-  own. Rebuilding is about a minute on the Mac plus an install; the game files on the device stay.
+  own. Once a game has started on the device in its last 3 days, the device's start screen says so
+  too, with the day it stops opening (nothing checks before a game starts). Rebuilding is about a minute on the Mac plus an install; the game files on the device stay.
+  To skip the weekly rebuild, sign in to Apple on the device (Slashplayed's **Settings > Signing > Sign
+  In to Apple…**, optional): Slashplayed then renews its own signing when a game starts in its last 3
+  days. It's a second sign-in to your Apple ID through a third-party anisette server, so a secondary
+  Apple ID on the team is safest. The password is used once and isn't kept; only an Apple token is, in
+  the device's keychain, until **Forget Apple Token**.
 - **Trust the developer once.** The first launch on each device fails with "Untrusted Developer".
   On the device open **Settings > General > VPN & Device Management**, tap your Apple ID under
   Developer App, tap **Trust**, then press **Retry Launch** in the companion.
@@ -100,14 +106,6 @@ copying on, every game file is copied again. Only change them on purpose.
   and the 4th-generation iPad Air) and the iPhone 15 don't have. The device menus still list such a
   device, marked "not supported", but don't let you pick it, and Play stops before building anything
   for one picked earlier: choose another device.
-- **"Untested: Slashplayed hasn't been tried on an M1 iPad yet"**: M1 iPads (the 2021 iPad Pros and
-  the 5th-generation iPad Air) run the game's instructions, but they protect code differently from
-  the M2 and later, and Slashplayed has only been played on the newer chips. Nothing stops you: play
-  as usual, then please [report how it goes](https://github.com/paulstraw/slashplayed/issues/new/choose),
-  working or not, with the zip from **Help > Export Diagnostics…**.
-- **"Untested: Slashplayed hasn't been tried on the A17 Pro iPad mini yet"**: the iPad mini (A17 Pro)
-  has the iPhone 15 Pro's chip and 8 GB of memory, so it should run the game, but no one has played on
-  one yet. Nothing stops you: play as usual, then please report how it goes in the same way.
 - **"Developer Mode is off"**: on the device, Settings > Privacy & Security > Developer Mode (it only
   shows there once the device has been paired with Xcode), turn it on, restart when asked and confirm.
 - **"Xcode can't see the device"** (while making the provisioning profile): Xcode couldn't reach the
@@ -123,11 +121,10 @@ Classic's ~23 GB of blocks are spread over every archive of it, so its copy take
 store and covers the others as well, and Retail uses nearly every archive. A game that fetches its own
 data takes only what it has needed so far (Classic Era: about 5 GB after 15 minutes across three zones).
 
-Retail on the iPad or iPhone needs a 512 GB or larger device. It has been played on an M2 iPad, where
-it runs hot and gets a memory warning (see [Heat](#heat)), and on an iPhone 16 Pro. MoP
-Classic has been played on the Vision Pro and an iPhone 16 Pro, and is **untested on the iPad**.
+Retail on the iPad or iPhone needs a 512 GB or larger device.
 
-Ticking or unticking a game rebuilds the client at the next Play. See
+Ticking a game copies its game program to the device at the next Play (about 50 MB); neither ticking nor
+unticking rebuilds the app. See
 [Not enough space on the device](#not-enough-space-on-the-device) for what unticking frees.
 
 ### Copying game files, or not
@@ -172,70 +169,6 @@ Mac's, and the files step says which:
   fetched data itself (with copying off, or for content this Mac didn't have), and copying this Mac's
   files under it would leave its indexes pointing at data that isn't there. It keeps fetching what it
   needs.
-
-### Update Games on This Device
-
-The setting puts a signing key on the device, so the device can sign a game's new build itself. It's off
-for every device until you turn it on. A free team sends the key the companion signs with; a paid team
-sends the Slashplayed certificate (Settings > Updates on Devices, below), and its switches stay off
-until that's set up. What happens:
-
-- **Turning it on** explains what's sent and asks. Nothing is sent yet.
-- **At the next Play or Update Client** (with the device reachable), the companion checks what the
-  device has. If it has no key, an expired one, or not the one the companion signs with now (Xcode
-  replaced the certificate), it sends one. With a free team, macOS first asks to allow **Slashplayed
-  Companion** to export a key from your keychain: choose **Allow** (or **Always Allow**). A paid team's
-  Slashplayed certificate goes without asking. The key goes to the device with a new random
-  password, and Slashplayed imports it into its keychain at its next start. Nothing is left on the Mac.
-- **Deny** sends nothing and turns the setting off again for that device; turn it on to be asked again.
-- **Turning it off** asks the device to delete the key; it does at Slashplayed's next start.
-- **Forget Signing Identity** on the device (the gear on Slashplayed's start screen) deletes it there too, and
-  the companion then turns the setting off for that device rather than send the key back. Turn it on
-  again to send it.
-- **"The certificate Slashplayed signs with was revoked on developer.apple.com"** (or **has expired**),
-  in the main window: the key isn't sent, and what the device makes with the copy it has may not load.
-  On a free team, make a new Apple Development certificate in Xcode (Settings > Apple Accounts, your
-  account, the team, **Manage Certificates…**), then press Play. On a paid team, the message names the
-  Slashplayed certificate: in Settings > Updates on Devices, stop using it and make a new one. If
-  the companion can't reach Apple to check, it says so in its log and goes on.
-- **A game the device updated plays the older version.** The device's log has `update: … is signed with a
-  certificate no profile the app can see lists, and this device has no identity that one lists`: the
-  key it was made with was replaced, and the device has no current one to sign it again with (Update Games
-  on This Device was turned off, or the new key hasn't reached it). Press Play in the companion: it
-  installs the current build, or sends the current key, and the next start signs the update again
-  (`signed again with this device's identity`).
-
-#### The Slashplayed certificate (paid teams)
-
-- **Apple Development is greyed out** on developer.apple.com, with "Maximum number of certificates
-  generated": the team has as many Apple Development certificates as Apple allows. In Certificates,
-  revoke one nobody uses (such as an old Slashplayed certificate, or one from a Mac you no longer have),
-  then click + again. When you stop using a Slashplayed certificate, revoke it there too, so it doesn't
-  keep taking a place.
-- **"That certificate wasn't made from Slashplayed's request"**: the certificate was made with another
-  request (Keychain Access's, or an older Slashplayed one). Upload `Slashplayed.certSigningRequest`
-  (Show Request finds it) and use the certificate that gives.
-- **"That certificate is for team …"**: it was made on another team. Make it on the team in Settings >
-  Signing.
-- **"Xcode's profile … doesn't list the Slashplayed certificate yet"** in the log: the companion asked
-  Xcode for the team's current profile and it didn't have the new certificate. Nothing was sent; the
-  next Play or Update Client asks again. Opening the team in Xcode > Settings > Apple Accounts
-  sometimes helps.
-- **"The Slashplayed certificate's keychain … couldn't be opened"**: its password (in your login
-  keychain, under "Slashplayed certificate keychain") is gone or the file was damaged. **Start Over** (or
-  Stop Using) deletes it; make a new request and certificate, and revoke the old one on
-  developer.apple.com.
-- **"Another copy of Slashplayed Companion made its key"** (Settings, and the main window when a
-  device updates games): the certificate was made by a copy signed differently, such as a build of your
-  own and a release, and macOS lets only the copy that made a key use it. Stop using it, then make a
-  new one. Nothing was sent, and Update Games on This Device stays on, so the next Play sends the new
-  one.
-- `[companion] certificate:` lines say what happened to the request and the certificate (its name and
-  last valid day, never its fingerprint or the key).
-
-The companion's log lines start with `[companion] identity:` (what it decided and why, sizes only); the
-device's start with `[sp:launch] identity:` (whether it has a key, and until when its certificate is
-valid). Neither ever shows the key, its password, or the certificate's fingerprint.
 
 ### Game install and Battle.net (optional)
 
@@ -420,13 +353,13 @@ the device isn't filled partway.
   it as "at least …". Before the headset's first start it's unknown, and the first copy goes ahead
   unchecked.
 
-### "Couldn't rebuild the client": game version isn't supported yet
+### "<Game> <build> isn't supported yet"
 
 "<Flavor> <build> isn't supported by this version of Slashplayed yet. Check for updates; if there
 isn't one, report it."
 
-A game patch made the client use a system function the shims don't provide yet. Nothing is
-installed, and nothing on the device changes.
+A game patch made the client use a system function the shims don't provide yet. That game's new
+version isn't copied, and nothing of it reaches the device.
 
 1. **Slashplayed Companion > Check for Updates…**: a release with support for the new build may
    already be out.
@@ -462,12 +395,13 @@ installs it again, and on an iPad or iPhone pairs it over USB as it does.
   Settings > General > VPN & Device Management, then press **Retry Launch**. See
   [Free Apple IDs](#free-apple-ids-personal-teams).
 - **The profile ran out** (free teams, after 7 days): press **Rebuild Now** in the main window, or
-  **Play**, which signs the app again.
+  **Play**, which signs the app again. To keep it from running out, see the device's Sign In to Apple in
+  [Free Apple IDs](#free-apple-ids-personal-teams).
 
 ### "Preparing code pages failed"
 
 Every launch, Slashplayed's helper, an extension inside the app, attaches to the game once, at
-startup, to prepare its code (see [The on-device JIT helper](architecture.md#the-on-device-jit-helper)).
+startup, to prepare its code (see [The on-device JIT helper](internals/loading.md#the-on-device-jit-helper)).
 When it can't, Slashplayed shows why on the device instead of starting the game, and the companion
 shows the same message:
 
@@ -475,6 +409,12 @@ shows the same message:
   opens LocalDevVPN to turn it on, which comes straight back to Slashplayed, and the game starts once
   it's on. If that didn't take, press **Turn On LocalDevVPN**, or turn it on in LocalDevVPN and come
   back: there's no need to close Slashplayed. While the device waits, the companion's step says the same.
+- **"Connect to Wi-Fi"**: LocalDevVPN is on, but the device's developer services don't answer through
+  it. That's cellular data: LocalDevVPN works only on Wi-Fi (an Apple limit LocalDevVPN can't get
+  around), and turning it off and on doesn't help. Join a Wi-Fi network, or turn on **Airplane Mode**
+  until the game starts loading, then turn it off again: the game needs LocalDevVPN for only a second
+  or two at the start, and signs in once the network is back. Either way the game starts by itself,
+  with no need to close Slashplayed or restart the device.
 - **"couldn't reach this … 's developer services, though LocalDevVPN is on"**: the tunnel didn't come
   up anyway. In LocalDevVPN, turn it off and on again, then close Slashplayed and open it again (or
   press **Retry Launch**).
@@ -506,63 +446,59 @@ Before the game starts, the device asks Blizzard's patch service which build is 
 is newer than the device's copy of the game. The screen first checks whether this version of Slashplayed
 can run the new build: the device downloads the new version's game program from Blizzard (about 50 MB,
 once per version; on cellular data or in Low Data Mode it asks first) and compares what it needs with
-what Slashplayed provides. Then it says one of two things:
+what Slashplayed provides. Then it says one of three things:
 
-- **"Update on your Mac to play it"**: press Play in the companion. It builds the device's copy from
-  Blizzard's current build (no Battle.net update on the Mac needed) and starts it. This is also what it
-  says when it couldn't check (the download failed, or you chose Not Now).
+- **"This <device> can update itself in a few seconds"**, with **Update**: tap it, and the device puts the
+  new version in place and starts it. Nothing on the device needs a signing key, so this works on a free
+  Apple ID too.
 - **"This patch needs a Slashplayed update"**: the new build uses something this version of Slashplayed
   doesn't provide yet. Check for updates in the companion (Slashplayed Companion > Check for Updates…);
   if there isn't one yet, the companion's own check reports it when you press Play, with a link to
   report it.
-
-When **Update Games on This Device** is on for the device (the companion's Settings), a new build that
-Slashplayed can run gets an **Update** button too: the device makes the new version itself, in a few
-seconds, and starts it. If the device then can't load what it made, it says so for a few seconds and starts
-the copy it had, and the next start offers Update again. The log lines start with `[sp:launch] update:`.
-The next Play or Update Client in the companion installs Blizzard's current build, that version or a
-later one, and the device then deletes the copy it made at its next start (`update: retired`). If the
-companion installed an older one (it couldn't reach Blizzard), its main window says so ("Classic Era
-1.15.9.70003, updated on the iPhone"), the device keeps playing its own, and the companion leaves that
-game's build files on the device as they are, even with Copy Game Files from This Mac on.
+- **"Whether Slashplayed can run it couldn't be checked"**: the download failed, or you chose Not Now.
+  Open the game again on Wi-Fi, or press Play in the companion, which copies Blizzard's current build to
+  the device itself.
 
 **Play Anyway** starts the copy the device has; the game's servers may not accept an outdated build.
 When the device can't reach the patch service (no network, or it's slow to answer), it starts the game
-without checking, after a few seconds at most. The log lines start with `[sp:launch] patch:`.
+without checking, after a few seconds at most. The log lines start with `[sp:launch] patch:`, and an
+update's with `[sp:launch] update:`.
 
-### Updating on the device: no Update button, or the update didn't work
+The companion's next Play or Update Client copies Blizzard's current build to the device when the
+device's is older, and the device then deletes the download it kept for Update (`update: retired`). If
+the device's own update is newer than the build the companion found (it couldn't reach Blizzard), its
+main window says so ("Classic Era 1.15.9.70003, updated on the iPhone"), the device keeps playing its
+own, and the companion leaves that game's build files on the device as they are, even with Copy Game
+Files from This Mac on.
 
-- **No Update button, only "Update on your Mac"**: the device has no signing key it can use. Its log
-  says which, in the `[sp:launch] identity:` line near the top:
-  - `identity: none`: **Update Games on This Device** is off for it in the companion, or it was turned
-    on but the key hasn't reached the device yet (it goes at the next Play or Update Client, with the
-    device reachable). `none (forgotten in Settings)`: Forget Signing Identity was used on the device;
-    turn the setting on again in the companion.
-  - `present, certificate valid until … (expired)`: the key's certificate has expired. Press Play in the
-    companion; it sends the current one, or says in its main window what to make first.
-  - `present, … not listed in any profile the app can see`: no profile on the device lists the key's
-    certificate (Xcode replaced it, or a paid team's Slashplayed certificate isn't in a profile yet).
-    Press Play in the companion: it installs the app with the current profile, or installs a profile that
-    lists the Slashplayed certificate, and sends the key that goes with it.
-  - The setting's on and the key is fine, but the screen still says "Update on your Mac": the device
-    couldn't download the new version to check it (`patch: message: update on your Mac: … couldn't tell
-    whether it binds`), or you chose Not Now. Open the game again on Wi-Fi.
+### Updating on the device: the update didn't work
+
 - **On cellular data or in Low Data Mode**, the device asks before the ~50 MB download: **Download** or
-  **Not Now**. Not Now starts nothing new: the screen says to update on your Mac, and the next start on
-  Wi-Fi downloads it without asking. A download is made once per version; Update itself downloads only
-  the new version's two small build files (under 100 KB).
-- **"<Game> couldn't be updated on this <device>"**: making or signing the new version failed; the screen
+  **Not Now**. Not Now starts nothing new, and the next start on Wi-Fi downloads it without asking. A
+  download is made once per version; Update itself downloads only the new version's two small build
+  files (under 100 KB).
+- **"<Game> couldn't be updated on this <device>"**: putting the new version in place failed; the screen
   gives the reason, and `[sp:launch] update: failed after …` has it too. Play Anyway starts the version
-  the device has. Press Play in the companion to update from the Mac, and export diagnostics if it
+  the device has. Press Play in the companion to copy it from the Mac, and export diagnostics if it
   repeats.
-- **"<Game> <version> couldn't be loaded"** for a few seconds, then the game starts: the device refused
-  the version it made (`update: the updated image didn't load (…): deleted, loading the bundled … instead`).
-  It plays the version the companion installed, its build files untouched, and the next start offers
-  Update again. If that keeps happening, press Play in the companion and export diagnostics.
-- **The device plays the older version without a word after an update**: the key that signed the update
-  is no longer in any profile, and the device has none that is (`update: … loading the bundled image,
-  keeping the update`). See "A game the device updated plays the older version" under [Update Games on
-  This Device](#update-games-on-this-device).
+- **"<Game> <version> couldn't be loaded on this <device>"**: the game program didn't load (the reason
+  follows: something it needs that Slashplayed doesn't provide, or a file that isn't a game program it can
+  load). A bad file is deleted, so the next start downloads it again, or the companion's next Play copies
+  it. If it keeps happening, check for a Slashplayed update and export diagnostics.
+- **"This version of iOS (or visionOS) doesn't have what Slashplayed needs to load the game"**, before
+  the sign-in: Slashplayed loads the game program with system functions Apple doesn't document, and this
+  OS version doesn't have one of them. Nothing else on the device changed. Check for a Slashplayed update.
+
+### Installing a game on the device
+
+A game you haven't put on the device reads **Install <game>** on Slashplayed's start screen. Tapping it
+downloads the game program from Blizzard (about 50 MB, asking first on cellular data), in the device's
+region, and then the game fetches its data as you play. Any failure says why, with **Back**.
+
+After an update from Slashplayed 1.4 or earlier, the first start of each game shows **"Getting <game>
+ready…"**: the device downloads its game program once (about 50 to 58 MB), since the app no longer
+carries the games. It needs the network that one time. Pressing Play in the companion first copies it
+from the Mac instead.
 
 ### The first start of a game
 
@@ -620,8 +556,20 @@ jetsam reports). Export Diagnostics and file a bug if it repeats.
   or password Slashplayed saved. Open Slashplayed, tap the gear on its start screen, tap **Forget My
   Sign-In**, then **Sign In…**, and sign in again. (Typing them into the game's own login screen doesn't work: it fails
   with the same error even when they're right.)
-- **Stuck at the authenticator prompt**: the game asks for the code in its own window, and takes typing
-  only from a hardware keyboard. Connect one, type the code, and press Return.
+- **"You have been disconnected. (BLZ51914400)"** at sign-in, sometimes after the game asks for a
+  captcha and sometimes with none: Battle.net turned the sign-in down at its last step, after the email
+  and password were accepted, so this isn't a wrong password (that's BLZ51914500, above), and signing in
+  again with the same details doesn't help. What makes Battle.net do it isn't known yet
+  ([#76](https://github.com/paulstraw/slashplayed/issues/76)).
+  - Check your email for an "account locked" or suspicious-login message from Blizzard, and do what it
+    asks before trying again.
+  - Don't try again many times in a row.
+  - On a device set up from a Mac, **Play with My Mac's Battle.net** (below) signs in through the Mac's
+    Battle.net instead and gets past it.
+  - On a device set up from Windows or Linux, there's no workaround yet.
+- **Stuck at the authenticator prompt**: the game asks for the code in its own window. On an iPad or
+  iPhone, hold two fingers still on the game for a moment, lift them, and tap **Keyboard**; on a Vision
+  Pro, connect a hardware keyboard. Type the code and press Return.
 - **"Unlock this iPad/iPhone, then open Slashplayed again"**: the saved sign-in is in the keychain,
   which can't be read while the device is locked (a launch from the companion with the device asleep).
 - **Using the Mac's Battle.net instead**: **Play with My Mac's Battle.net** in the menu by Play signs
@@ -651,7 +599,7 @@ uncapped by default, at 120 fps, and long sessions get hot. Retail on an M2 iPad
   scale and graphics quality.
 - Take breaks; a cool-down of 15 minutes or more makes the next session last noticeably longer.
 
-Measurements are in [architecture.md, Heat](architecture.md#heat).
+Measurements are in [the internals, Heat](internals/shims.md#heat).
 
 ### Space does nothing (no jumping) with a hardware keyboard
 
@@ -674,12 +622,30 @@ To make it much less obtrusive, recolor it and turn off its border in
 Settings > Accessibility > Accessories > **Pointer Control**, which is listed only while the mouse is
 connected. Touch and a hardware keyboard work without AssistiveTouch.
 
-### No on-screen keyboard
+### The on-screen keyboard
 
-Tapping the chat box (or any text field) brings up no on-screen keyboard: the game takes typing only
-from a hardware keyboard, so chat, and an authenticator's code at sign-in, need one. Tested on the
-iPhone; a Bluetooth keyboard works, chat included. (Slashplayed's own screens, such as the sign-in
-screen, do get the on-screen keyboard.)
+On an iPad or iPhone with no hardware keyboard connected, the on-screen keyboard comes up when one of
+the game's text boxes takes focus: tap chat's speech bubble and choose **Say** (or another channel), or
+open any box the game puts up. It goes away when the box closes, such as when Return sends a chat line,
+and **Done** above it closes it any time. On an iPhone the game zooms onto the box while you type and
+goes back when the keyboard closes; taps land on what you see. The keyboard's microphone key dictates.
+
+To open chat without the speech bubble, or to bring the keyboard back after **Done**, hold two fingers
+still on the game for a moment and lift them, then tap **Keyboard** in the menu that opens. With no box
+open, that presses Return, which opens chat. On the login and character screens (an authenticator
+code), where the game says nothing about its boxes, **Keyboard** brings the keyboard up at the spot you
+held, and only **Done** closes it.
+
+Typing goes to the game as key presses, so the caret stays at the end of the box, an autocorrection is
+retyped there, and languages that compose their characters (Japanese, Chinese, Korean) reach the game
+only once each word is chosen.
+
+The same menu has **Paste**: copy the text in another app, open the game's text box, hold two fingers
+still on it for a moment, lift them, and tap **Paste**. **Copy** copies what's selected in the box.
+
+A Vision Pro has no on-screen keyboard in the game: chat, and an authenticator's code at sign-in, need a
+hardware keyboard there. (Slashplayed's own screens, such as the sign-in screen, do get the on-screen
+keyboard everywhere.)
 
 ### Closing the window
 
@@ -753,4 +719,4 @@ IDs, team IDs and names, Apple IDs, device and Mac names, and your user folder i
 `summary.txt` says how many of each.
 Never paste Battle.net preference contents into an issue yourself.
 
-See [Logs and diagnostics](architecture.md#logs-and-diagnostics) for where each log comes from.
+See [Logs and diagnostics](internals/shims.md#logs-and-diagnostics) for where each log comes from.

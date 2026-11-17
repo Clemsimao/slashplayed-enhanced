@@ -9,8 +9,7 @@
 #   apps/companion/bundle-resources.sh --install <staging dir> <app>  their output and the rest, into it
 # Contents/Resources/ gets, per device platform (xros, ios), <platform>/: the unsigned shim dylibs, their
 # exports.json (the bind check's manifest) and rewrite-map.txt, the unsigned launcher (slashplayed) and
-# licenses/ (the device app's: zsign's and OpenSSL's, which the launcher links, from scripts/build-zsign.sh,
-# idevice's with its crates' and the Rust standard library's, which the helper links, from
+# licenses/ (the device app's: idevice's with its crates' and the Rust standard library's, which the helper links, from
 # scripts/build-idevice.sh <platform>, and the start screen's face's, goodmountain.txt), the start screen's
 # face, Goodmountain-Regular.otf, unmodified (scripts/fetch-font.sh: its license forbids changing it), the unsigned JIT helper's executable (SPJitHelper,
 # apps/client/build-helper.sh: needs idevice for the platform), and icon/ (the device app's compiled icon,
@@ -19,7 +18,7 @@
 # the build put there (project.yml); this adds idevice's as the companion links it, and the device app's.
 # Once, for both platforms: client/Info.plist and client/entitlements.plist (the device app's templates),
 # client/flavors.plist (copied into the app as it is), and client/helper/'s
-# two (the helper's), the addons (SPHover, SPMovie, and SPTouchBars: their .toc, .lua, and artwork), the signing stub project (signing/SPProfiles.xcodeproj, generated
+# two (the helper's), the addons (addons/SPHover, addons/SPMovie, addons/SPKeyboard, addons/SPTouchBars: their .toc and .lua, and SPTouchBars' artwork), the signing stub project (signing/SPProfiles.xcodeproj, generated
 # here, since the user's Mac has no xcodegen). (The identity
 # file mac-identity.c writes comes from its Swift port, MacIdentity.) Needs xcodegen; nothing here is Blizzard's (no client is read).
 set -euo pipefail
@@ -51,8 +50,8 @@ if [ "$MODE" != install ]; then
 rm -f "$STAGE/.built"
 for p in xros ios; do
   rm -rf "${STAGE:?}/$p" && mkdir -p "$STAGE/$p/licenses"
-  cp "$ROOT/work/zsign/licenses/zsign.txt" "$ROOT/work/zsign/licenses/openssl.txt" "$STAGE/$p/licenses/"
   cp "$ROOT/work/idevice/$p/licenses/idevice.txt" "$ROOT/work/idevice/$p/licenses/rust-std.html" "$STAGE/$p/licenses/"
+  cp "$ROOT/work/spapple/$p/licenses/spapple.txt" "$STAGE/$p/licenses/"
   cp "$FONT/LICENSE.md" "$STAGE/$p/licenses/goodmountain.txt"
   cp "$FONT/Goodmountain-Regular.otf" "$STAGE/$p/"
 done
@@ -108,8 +107,7 @@ rm -f "$RES/jit.py"  # bundled while the Mac's lldb did the prepare
 # The addons, into the device app as it's assembled (ClientAssembly.addonFiles): the launcher puts them in
 # each game's folder. The loose copies are from before, when the companion copied them to the device itself.
 rm -rf "${RES:?}/SPHover" "${RES:?}/SPMovie" "${RES:?}/addons"
-for a in SPHover SPMovie SPTouchBars; do mkdir -p "$RES/addons/$a" && cp "$ROOT/addon/$a/$a.toc" "$ROOT/addon/$a/$a.lua" "$RES/addons/$a/"; done
-
+for a in SPHover SPMovie SPKeyboard SPTouchBars; do mkdir -p "$RES/addons/$a" && cp "$ROOT/addon/$a/$a.toc" "$ROOT/addon/$a/$a.lua" "$RES/addons/$a/"; done
 cp "$ROOT/addon/SPTouchBars/SPTouchBars.tga" "$RES/addons/SPTouchBars/"
 
 # The stub project goes in as a generated .xcodeproj with its sources beside it (xcodegen writes paths
@@ -127,9 +125,10 @@ rm -f "$RES/mac-identity"  # bundled before MacIdentity replaced it
 ACK=$RES/Acknowledgements
 [ -s "$ACK/Sparkle.txt" ] || { echo "no Sparkle.txt in $ACK: the build's Sparkle license phase (project.yml) didn't run" >&2; exit 1; }
 cp "$ROOT/work/idevice/macos/licenses/idevice.txt" "$ROOT/work/idevice/macos/licenses/rust-std.html" "$ACK/"
-cp "$ROOT/work/zsign/licenses/zsign.txt" "$ROOT/work/zsign/licenses/openssl.txt" "$ACK/"
 cp "$ROOT/work/idevice/ios/licenses/idevice.txt" "$ACK/idevice-ios.txt"
 cp "$ROOT/work/idevice/xros/licenses/idevice.txt" "$ACK/idevice-visionos.txt"
+cp "$ROOT/work/spapple/ios/licenses/spapple.txt" "$ACK/spapple-ios.txt"
+cp "$ROOT/work/spapple/xros/licenses/spapple.txt" "$ACK/spapple-visionos.txt"
 cp "$FONT/LICENSE.md" "$ACK/goodmountain.txt"
 cat > "$ACK/README.txt" <<'EOF'
 Slashplayed Companion is MIT-licensed (Copyright (c) 2026 Straw Dynamics) and includes these
@@ -142,9 +141,10 @@ third-party components, each under its own license:
 
 The Slashplayed app it builds for your device also includes:
 
-  zsign and OpenSSL   signing a game update on the device             zsign.txt, openssl.txt
   idevice             the JIT helper, with its Rust crates and the    idevice-ios.txt,
                       Rust standard library (rust-std.html)           idevice-visionos.txt
+  isideload           renewing the app's provisioning profiles, in    spapple-ios.txt,
+                      spapple, with its Rust crates                   spapple-visionos.txt
   Goodmountain        the start screen's typeface, by Hermann S       goodmountain.txt
                       Designs (shipped unmodified)
 

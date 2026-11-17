@@ -1,14 +1,24 @@
-# slashplayed-companion: the host tool that sets up Slashplayed on an iPad or iPhone from Windows, Linux, or a
-# Mac without Xcode (docs/setup-without-a-mac.md; how it works: docs/architecture.md, "The host tool").
-# Built with the Rust that rust-toolchain.toml pins, and --locked: Cargo.lock is committed. build.rs
-# compiles zsign (scripts/build-zsign.sh source, with scripts/zsign.patch) into it.
+# slashplayed-companion (the window) and slashplayed-cli (the command line): the host tool that sets up Slashplayed on an iPad or iPhone from Windows, Linux, or a
+# Mac without Xcode (docs/setup-without-a-mac.md; how it works: docs/internals/host-tool.md).
+# Built with the Rust that rust-toolchain.toml pins, and --locked: Cargo.lock is committed. spzsign
+# (zsign/) compiles zsign (scripts/build-zsign.sh source, with scripts/zsign.patch) into it.
 [package]
 name = "slashplayed-companion"
-version = "1.4.0"
+version = "1.6.1"
 edition = "2024"
 publish = false
 license = "MIT"
 build = "build.rs"
+
+# Two programs on one library (src/lib.rs, the install): the window, and the command line. Cargo's names
+# can't hold a space; package.sh names the Windows window program "Slashplayed Companion.exe".
+[[bin]]
+name = "slashplayed-companion"
+path = "src/window.rs"
+
+[[bin]]
+name = "slashplayed-cli"
+path = "src/main.rs"
 
 # Its own workspace: nothing above it is a Cargo project, and cargo shouldn't go looking.
 [workspace]
@@ -19,12 +29,15 @@ build = "build.rs"
 # whatever is enabled; tokio-mt: anisette's provisioning websocket). keyring-storage off: nothing of the
 # login is stored.
 isideload = { path = "vendor/isideload", default-features = false, features = ["install", "tokio-mt"] }
+# zsign and OpenSSL, the app's signer (src/sign.rs): a crate of its own so a version bump here doesn't
+# rebuild them (zsign/Cargo.toml says why).
+spzsign = { path = "zsign" }
 # usbmuxd, lockdown and its pairing, installation_proxy over AFC, house_arrest, amfi, and the RemotePairing
 # record. Patched below to the repo's pinned idevice (scripts/build-idevice.sh pins the same commit).
 idevice = { version = "0.1.68", default-features = false, features = [
   "ring", "usbmuxd", "pair", "afc", "house_arrest", "installation_proxy", "amfi", "remote_pairing",
 ] }
-tokio = { version = "1.49", features = ["rt-multi-thread", "macros", "fs"] }
+tokio = { version = "1.49", features = ["rt-multi-thread", "macros", "fs", "sync"] }
 rustls = { version = "0.23", default-features = false, features = ["ring"] }
 reqwest = { version = "0.13.2", default-features = false, features = ["rustls-no-provider", "http2"] }
 plist = "1.8"
@@ -33,9 +46,7 @@ serde_json = "1"
 rsa = "0.9.10"
 rcgen = { version = "0.14.7", default-features = false, features = ["ring", "pem"] }
 x509-cert = "0.2.5"
-p12-keystore = { version = "0.3.0-rc4", package = "isideload-p12-keystore" }
 sha2 = "0.11.0"
-sha1 = "0.11.0"
 hex = "0.4.3"
 rand = "0.8.5"
 http = "1.4"
@@ -49,14 +60,31 @@ keyring = { version = "3.6.3", default-features = false, features = [
   "apple-native", "windows-native", "async-secret-service", "tokio", "crypto-rust",
 ] }
 
+# The window (src/gui): egui on OpenGL (glow), with winit's X11 and Wayland, both loaded at run time, so
+# slashplayed-cli, which uses none of it, links no display library and runs headless. accesskit: screen
+# readers, and the accessibility tree egui_kittest's tests query.
+eframe = { version = "0.37", default-features = false, features = [
+  "accesskit", "clipboard", "default_fonts", "glow", "wayland", "x11",
+] }
+# PNG out for the drill's screenshots (SP_GUI_SHOT), as eframe already builds it.
+image = { version = "0.25.10", default-features = false, features = ["png"] }
+# The parser egui reads its faces with: Goodmountain is checked with it before egui gets it (theme.rs).
+skrifa = { version = "0.44", default-features = false }
+
+# A window that can't open says why (window.rs): with no console, a message box is all there is.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_UI_WindowsAndMessaging"] }
+
 [build-dependencies]
-cc = "1.2"
-# zsign's OpenSSL, built from source and linked statically: openssl-src's 3.5 line, the release
-# scripts/build-zsign.sh pins for the device (docs/architecture.md, "The host tool").
-openssl-src = "=300.5.5"
+# The Windows programs' icon and version resource (icons/slashplayed.ico), compiled with the SDK's rc.exe.
+winresource = "0.1.34"
 
 [dev-dependencies]
+# The window's tests (src/gui/tests.rs): its accessibility tree, no image snapshots.
+egui_kittest = { version = "0.37", features = ["eframe"] }
 tempfile = "3"
+# Paused time for flow.rs's tests: its waits poll every two seconds.
+tokio = { version = "1.49", features = ["test-util"] }
 
 [patch.crates-io]
 idevice = { git = "https://github.com/jkcoxson/idevice", rev = "d32c8189c51c2789496b0768039419c3705498c3" }

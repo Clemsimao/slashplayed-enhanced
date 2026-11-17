@@ -234,8 +234,12 @@ static void sp_test_space_ring(SPInputView *view, void (^done)(NSString *)) {
         @try {
             SPJoystickHandle *ring = nil;
             for (UIView *child in space.subviews) if ([child isKindOfClass:SPJoystickHandle.class]) ring = (id)child;
+            NSMutableString *seen = [NSMutableString string];
+            for (SPEvent *e in sp_events) [seen appendFormat:@" %lu/%u%@", (unsigned long)e->type, e->keyCode, e->isARepeat ? @"r" : @""];
             sp_test_check(!ring.highlighted && space.highlighted && CGPointEqualToPoint(space.center, center) && sp_events.count == 1,
-                          @"Moving early cancels the unlock without moving the button or releasing a held Space key.");
+                          [NSString stringWithFormat:@"Moving early cancels the unlock without moving the button or releasing a held Space key. "
+                           "ring %d, held %d, moved %d, events:%@", ring.highlighted, space.highlighted,
+                           !CGPointEqualToPoint(space.center, center), seen]);
             sp_test_send(early, UITouchPhaseEnded, event);
             sp_test_check(!space.highlighted && !sp_repeat_key, @"The early-moving press still releases Space normally on lift.");
         } @catch (NSException *e) { done(e.reason); return; }

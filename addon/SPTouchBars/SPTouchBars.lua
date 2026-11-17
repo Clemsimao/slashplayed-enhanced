@@ -13,6 +13,10 @@ local editing, selected, refreshPanel, editPage = false, nil, nil, 1
 local initialized, pendingInit = false, false
 local apply, defaultBarsContainer, openOutlinePicker
 local previewing, editSnapshot = false, nil
+-- A physical pad takes over from the touch bars. The app hides its own touch controls itself; the
+-- bars follow on the pad's first button press and return when a pad disconnects.
+local padMode = false
+local VISIBILITY = "[petbattle][vehicleui][possessbar][overridebar]hide;show"
 local function isSelected(button)
     return editing and not previewing and selected and (selected == button or selected.kind == "utility" and button.kind == "utility")
 end
@@ -72,6 +76,7 @@ local function loadSettings()
     db.hideDefaultBars = db.hideDefaultBars ~= false
     db.nearbyInteract = db.nearbyInteract ~= false
     db.questInteract = db.questInteract ~= false
+    db.padAuto = db.padAuto ~= false
     if type(db.appearance) ~= "table" then db.appearance = {} end
     if type(db.visibility) ~= "table" then db.visibility = {} end
     for _, group in ipairs({ "spells", "utility" }) do
@@ -284,7 +289,7 @@ local function updateDefaultBars()
                             "MultiBarLeft", "MultiBar5", "MultiBar6", "MultiBar7" }) do
         local bar = _G[name]
         if bar then
-            if db.hideDefaultBars then
+            if db.hideDefaultBars and not padMode then
                 if not defaultBarParents[bar] then defaultBarParents[bar] = bar:GetParent() end
                 if bar:GetParent() ~= defaultBarsContainer then bar:SetParent(defaultBarsContainer) end
             elseif defaultBarParents[bar] then
@@ -536,7 +541,7 @@ local function releaseNearbyInteraction()
 end
 local function updateNearbyInteraction()
     if InCombatLockdown() then return end
-    if not db.nearbyInteract or not db.controls.interact.enabled or not nativeInteract() then
+    if padMode or not db.nearbyInteract or not db.controls.interact.enabled or not nativeInteract() then
         releaseNearbyInteraction()
         return
     end
@@ -787,6 +792,34 @@ apply = function()
     updateDefaultBars()
     updateInteractIcon()
     if refreshSettings then refreshSettings() end
+    -- The editor stays reachable with a pad connected.
+    local visibility = padMode and not editing and "hide" or VISIBILITY
+    for _, frame in ipairs({ header, utility, controlsHeader }) do RegisterStateDriver(frame, "visibility", visibility) end
+end
+-- The touch joystick is a left stick only, so a held button is always a physical pad's. Only the
+-- real buttons are read (d-pad, face, stick clicks, shoulders, triggers: the first 16), never a
+-- stick direction reported as a button.
+local function padButtonDown()
+    if not (C_GamePad and C_GamePad.GetAllDeviceIDs and C_GamePad.GetDeviceMappedState) then return false end
+    local ok, ids = pcall(C_GamePad.GetAllDeviceIDs)
+    if not ok or type(ids) ~= "table" then return false end
+    for _, id in ipairs(ids) do
+        local read, state = pcall(C_GamePad.GetDeviceMappedState, id)
+        local buttons = read and type(state) == "table" and state.buttons
+        if type(buttons) == "table" then
+            for i = 1, math.min(#buttons, 16) do
+                if readable(buttons[i]) and buttons[i] == true then return true end
+            end
+        end
+    end
+    return false
+end
+local function setPadMode(on)
+    on = on and db.padAuto and true or false
+    if on == padMode then return end
+    padMode = on
+    say(on and "Controller in use: touch bars hidden. /sptouch pad turns this off." or "Touch bars shown.")
+    if not InCombatLockdown() then apply() end  -- else PLAYER_REGEN_ENABLED applies it
 end
 local function control(parent, label, x, y, width, callback)
     local button = CreateFrame("Button", nil, parent, "UIPanelButtonTemplate")
@@ -1302,10 +1335,9 @@ local function initialize()
         end
     end)
     -- Special contexts use the native controls, including any main-bar replacement pages.
-    local visibility = "[petbattle][vehicleui][possessbar][overridebar]hide;show"
-    RegisterStateDriver(header, "visibility", visibility)
-    RegisterStateDriver(utility, "visibility", visibility)
-    RegisterStateDriver(controlsHeader, "visibility", visibility)
+    RegisterStateDriver(header, "visibility", VISIBILITY)
+    RegisterStateDriver(utility, "visibility", VISIBILITY)
+    RegisterStateDriver(controlsHeader, "visibility", VISIBILITY)
     controlsHeader:SetAttribute("_onstate-combat", COMBAT_SNIPPET)
     createPanel()
     createSettings()
@@ -1331,6 +1363,7 @@ events:RegisterEvent("PLAYER_REGEN_DISABLED")
 events:RegisterEvent("PLAYER_REGEN_ENABLED")
 events:RegisterEvent("UI_SCALE_CHANGED")
 events:RegisterEvent("DISPLAY_SIZE_CHANGED")
+pcall(events.RegisterEvent, events, "GAME_PAD_DISCONNECTED")  -- not on every client
 events:SetScript("OnEvent", function(_, event, name, questID)
     if event == "ADDON_LOADED" and name ~= "Blizzard_GamepadActionBars" then return end
     if event == "QUEST_ACCEPTED" and (questID or name) then handledQuests[questID or name] = "accepted"
@@ -1343,6 +1376,9 @@ events:SetScript("OnEvent", function(_, event, name, questID)
         return
     elseif event == "PLAYER_LOGOUT" then
         releaseNearbyInteraction()
+        return
+    elseif event == "GAME_PAD_DISCONNECTED" then
+        if initialized then setPadMode(false) end
         return
     elseif event == "PLAYER_LOGIN" then initialize()
     elseif event == "PLAYER_REGEN_ENABLED" then
@@ -1375,6 +1411,7 @@ events:SetScript("OnUpdate", function(_, elapsed)
             if updateInteractAction() then controlsHeader:Execute([[ self:RunAttribute("update-page") ]]) end
         end
         refresh(); updateInteractIcon()
+        if initialized and db.padAuto and not padMode and padButtonDown() then setPadMode(true) end
     end
 end)
 SLASH_SPTOUCHBARS1 = "/sptouch"
@@ -1383,6 +1420,12 @@ SlashCmdList.SPTOUCHBARS = function(message)
     if initialized and message and message:lower():match("^%s*status%s*$") then
         say("Nearby interaction mode: " .. (C_CVar.GetCVar("SoftTargetInteract") or "unavailable")
             .. "; native Interact: " .. (nativeInteract() and "ready" or "missing"))
+        return
+    end
+    if initialized and message and message:lower():match("^%s*pad%s*$") then
+        db.padAuto = not db.padAuto
+        if not db.padAuto then setPadMode(false) end
+        say("Hiding the touch bars while a controller is in use: " .. (db.padAuto and "on" or "off"))
         return
     end
     if initialized then setEditing(not editing)

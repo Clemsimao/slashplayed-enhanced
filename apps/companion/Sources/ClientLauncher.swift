@@ -30,12 +30,14 @@ final class ClientLauncher {
     static let prepareTimeout: TimeInterval = 180
 
     /// The launcher's console lines this follows (apps/client/launcher.m, spjit.m, sppatch.m,
-    /// shims/system/spsystem.c).
+    /// spguestlaunch.m). The companion always installs its own build of the app before a launch, so the two
+    /// never disagree on them.
     enum Marker {
         static let attached = "[sp:launch] jit: helper attached"
         static let alreadyTraced = "[sp:launch] jit: a debugger is already attached"
         static let problem = "[sp:launch] can't prepare the client: "
-        static let detached = "[sp:System] detached"
+        /// The launcher's loader once the helper has prepared the client's code and detached (spguestlaunch.m).
+        static let detached = "[sp:launch] guest: detached"
         static let pairing = "[sp:launch] pair: showing the pairing screen"
         static let paired = "[sp:launch] pair: wrote Library/sppairing.plist"
         static let vpnOff = "[sp:launch] vpn: waiting for LocalDevVPN"
@@ -189,6 +191,9 @@ final class ClientLauncher {
                 }
                 try? await Task.sleep(for: .milliseconds(200))
             }
+            // spguest's detach comes ~0.1 s after the helper's attach, often within one poll, which then ends
+            // the loop before it saw the attach: "Client started" would never show (2 of 3 Plays did that).
+            if detached.value && !preparing { onPhase(.preparing) }
             pid = try? await device.clientPID()
             if detached.value {
                 log("prepared\(pid.map { ", pid \($0)" } ?? "")")

@@ -2,19 +2,20 @@
 // inset-grouped, in SwiftUI. The launcher has no SwiftUI App: UIKit runs as a coroutine the launcher pumps
 // by hand (spuikit.m), so the sheet is a UIHostingController the start screen presents, behind a C entry
 // point (sp_settings_sheet, spswift.h). Its logic stays in Objective-C, called through spswift.h: the
-// sign-in's keychain (splogin.m), the signing identity (spsign.m), and each game's build and reset
-// (launcher.m). The sheet reads them again after every change (`Settings.reload`): no state of its own but
+// sign-in's keychain (splogin.m), and each game's build and reset (launcher.m). The sheet reads them again after every change (`Settings.reload`): no state of its own but
 // whether the email shows and where it's navigated to.
 //
-// Battle.net: whether a sign-in is saved, Show Email, Forget My Sign-In, or Sign In…. The email is the one
+// Battle.net: whether a sign-in is saved, Show Email, Forget My Sign-In, or Sign In…. Signing: until when the
+// app opens (sp_profile_expiry), Forget Apple Token, when the app has the token it renews that with, and Sign
+// In to Apple…, the launcher's own sign-in for one (spapple.m), when it has none or Apple stopped taking it. The email is the one
 // value shown, only on a tap (no Face ID, Optic ID, or passcode: it's the person's own device), and only
-// until the app goes to the background, the sheet closes, or a game starts (sp_settings_hide_email). Game
-// Updates: the signing identity's state (dates only) and Forget Signing Identity. Both forgets act at the
-// tap, after an alert whose default is Cancel. Display lists resolutions; WoW owns the selection.
-// Games has a page per game
-// (the start screen's, in its order): the build it starts with (shipped with the app, or updated on this
-// device), its region (a picker for a game the device decides it for, sp_game_set_region; the Mac's, named,
-// for a game the companion installed), Open in Files, and Reset Game Settings (after its alert). About: the app's version and
+// until the app goes to the background, the sheet closes, or a game starts (sp_settings_hide_email). Signing:
+// until when the app opens, Sign In to Apple… and Forget Apple Token. The forgets act at the tap, after an
+// alert whose default is Cancel. Display lists resolutions; WoW owns the selection. Games has a page per game
+// (the start screen's, in its order): the build it starts with and where its client came from, its region
+// (a picker for a game the device decides it for, sp_game_set_region; the Mac's, named, for a game the
+// companion installed), Addons (spaddonsscreen.swift's pages, for an installed game), Open in Files, and
+// Reset Game Settings (after its alert). About: the app's version and
 // Acknowledgements, the licenses of what the app ships.
 import SwiftUI
 import UIKit
@@ -61,20 +62,14 @@ private func setChordRightFinger(_ right: Bool) {
     say("touch: click with " + (right ? "right" : "left") + " finger")
 }
 
-// "Mar 14, 2027", in the person's locale.
-private func mediumDate(_ date: Date?) -> String {
-    guard let date else { return "Unknown" }
-    return DateFormatter.localizedString(from: date, dateStyle: .medium, timeStyle: .none)
-}
-
 // The license files in the app's licenses/ (apps/client/build.sh, the companion's ClientAssembly), by name,
 // in this order; one this doesn't know comes last, under its file name.
 struct License: Hashable {
     let path: String, name: String
     static func all() -> [License] {
         let dir = (Bundle.main.bundlePath as NSString).appendingPathComponent("licenses")
-        let known = [("zsign.txt", "zsign"), ("openssl.txt", "OpenSSL"), ("idevice.txt", "idevice"),
-                     ("rust-std.html", "Rust Standard Library"), ("goodmountain.txt", "Goodmountain")]
+        let known = [("idevice.txt", "idevice"), ("rust-std.html", "Rust Standard Library"),
+                     ("spapple.txt", "isideload"), ("goodmountain.txt", "Goodmountain")]
         var files = ((try? FileManager.default.contentsOfDirectory(atPath: dir)) ?? []).sorted()
         var list: [License] = []
         for (file, name) in known where files.contains(file) {
@@ -109,16 +104,18 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
 }
 
 enum Page: Hashable {
-    case joystick, rightClick, keyboard, game(String), gameUpdates, acknowledgements, license(License)
+    case joystick, rightClick, keyboard, game(String), acknowledgements, license(License)
+    // A game's Addons page and its catalog (spaddonsscreen.swift).
+    case addons(String), browse(String)
 }
 
 // The confirmations, each with Cancel as its default.
 enum Confirmation: Identifiable {
-    case forgetSignIn, forgetIdentity, reset(String)
+    case forgetSignIn, forgetAppleToken, reset(String)
     var id: String {
         switch self {
         case .forgetSignIn: "forget-signin"
-        case .forgetIdentity: "forget-identity"
+        case .forgetAppleToken: "forget-apple-token"
         case .reset(let flavor): "reset-" + flavor
         }
     }
@@ -126,15 +123,17 @@ enum Confirmation: Identifiable {
 
 // What's true now, read once per reload (the build reads files, and SwiftUI may ask for the body often).
 struct Snapshot {
-    // `installed`: it has an image to start (sp_game_has_image); `shipped`: the app has one (an app built
-    // without images has none, and the device installs each game itself).
+    // `installed`: the device has it (sp_game_has_image: its client, or game data whose client its next start
+    // gets, `version` nil); `source`: where its client came from (sp_game_build).
     // `region`: its code (sp_game_region_now); `regionHere`: the device decides it, so Settings can change it.
     struct Game {
-        let flavor: String, name: String, version: String?, updated: Bool, installed: Bool, shipped: Bool
+        let flavor: String, name: String, version: String?, source: String?, installed: Bool
         let region: String, regionHere: Bool
     }
     var saved = false
-    var identity: SPIdentityReading?
+    var appleToken = false  // spapple.m's: the token the app renews its own profiles with
+    var needsSignIn = false  // spapple.m's: the last renewal had no token it could use
+    var signedUntil: Date?  // when the app stops opening, unless it's renewed (sp_profile_expiry)
     var scale = 0
     var chordRightFinger = false
     var thumbEnabled = true
@@ -156,6 +155,8 @@ final class Settings: ObservableObject {
     @Published var confirmation: Confirmation?
     weak var host: UIViewController?
     var drill: String?
+    // Each game's Addons pages' state, made when one first opens and kept while the sheet's up.
+    private var addonsByFlavor: [String: Addons] = [:]
 
     // The sheet that's up, for sp_settings_hide_email.
     static weak var shown: Settings?
@@ -176,7 +177,9 @@ final class Settings: ObservableObject {
         var s = Snapshot()
         s.saved = sp_login_saved()
         if !s.saved { email = nil }
-        s.identity = sp_identity_reading()
+        s.appleToken = sp_apple_token_present()
+        s.needsSignIn = sp_profiles_need_signin()
+        s.signedUntil = sp_profile_expiry()
         let scale = UserDefaults.standard.integer(forKey: scaleKey)
         s.scale = scale == 1 || scale == 2 ? scale : 0
         s.chordRightFinger = UserDefaults.standard.bool(forKey: chordRightFingerKey)
@@ -190,13 +193,11 @@ final class Settings: ObservableObject {
         let keyboardSize = (UserDefaults.standard.object(forKey: keyboardSizeKey) as? NSNumber)?.doubleValue ?? keyboardDefaultSize
         s.keyboardSize = keyboardSize.isFinite ? min(keyboardSizeRange.upperBound, max(keyboardSizeRange.lowerBound, keyboardSize)) : keyboardDefaultSize
         s.games = flavors.map { flavor in
-            var updated: ObjCBool = false
-            let version = sp_game_build(flavor, &updated)?["Version"]
-            let shipped = FileManager.default.fileExists(atPath: Bundle.main.bundleURL.appending(path: "wow-" + flavor).path)
+            var source: NSString?
+            let version = sp_game_build(flavor, &source)?["Version"]
             let region = sp_game_region_now(flavor)
-            return .init(flavor: flavor, name: sp_flavor_name(flavor), version: version, updated: updated.boolValue,
-                         installed: sp_game_has_image(flavor), shipped: shipped, region: region["Region"] ?? "us",
-                         regionHere: region["Device"] == "1")
+            return .init(flavor: flavor, name: sp_flavor_name(flavor), version: version, source: source as String?,
+                         installed: sp_game_has_image(flavor), region: region["Region"] ?? "us", regionHere: region["Device"] == "1")
         }
         s.version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "Unknown"
         now = s
@@ -216,8 +217,20 @@ final class Settings: ObservableObject {
 
     func close() { host?.presentingViewController?.dismiss(animated: true) }
 
+    func addons(_ flavor: String) -> Addons {
+        if let a = addonsByFlavor[flavor] { return a }
+        let a = Addons(flavor: flavor)
+        addonsByFlavor[flavor] = a
+        return a
+    }
+
     func signIn() {
         host?.present(sp_login_screen { [weak self] _ in self?.reload() }, animated: true)
+    }
+
+    // Sign In to Apple…: spapple.m's sign-in, full screen over the sheet.
+    func appleSignIn() {
+        host?.present(sp_apple_signin { [weak self] _ in self?.reload() }, animated: true)
     }
 
     func confirm(_ c: Confirmation) {
@@ -225,8 +238,8 @@ final class Settings: ObservableObject {
         case .forgetSignIn:
             _ = sp_login_forget()
             email = nil
-        case .forgetIdentity:
-            say(sp_identity_forget())
+        case .forgetAppleToken:
+            say(sp_apple_token_forget())
         case .reset(let flavor):
             say(sp_game_reset(flavor))
         }
@@ -258,22 +271,38 @@ final class Settings: ObservableObject {
     }
 
     // The drill's states open the real category/page routes: `settings`, `controls`, `joystick`,
-    // `right-click`, `keyboard`, `game-updates`, `display`, `games`, `account`, and `about`.
+    // `right-click`, `keyboard`, `signing`, `display`, `games`, `account`, and `about`.
     // `sign-in` opens Sign In…'s screen; `sign-in-launch`
     // (the sign-in screen as a launch with no saved sign-in shows it, full screen; it saves nothing),
     // `vpn`, `pair`, and `pair-code` (the LocalDevVPN wait's and the pairing screen's, the last asking for the
     // code; they do nothing), `acknowledgements` (its
     // page), `license-<file>` (one license's text, e.g. license-rust-std), and `alert-forget-signin`,
-    // `alert-forget-identity`, and `alert-reset` (the confirmations, the last for the first game, shown
+    // `apple-sign-in` (Sign In to Apple…'s screen: a real sign-in, as a tap's is), `apple-sign-in-code`,
+    // `apple-sign-in-texts`, and `apple-sign-in-done` (its 2FA step, by device and by text with made-up
+    // numbers, and its end; they sign nothing in), `alert-forget-apple-token`, and `alert-reset` (the
+    // confirmations, the last for the first game, shown
     // whatever's saved, so they can be screenshotted without a credential; Cancel is what a drill expects to
     // be tapped, if anything). `reset-<flavor>` is Reset's Reset tapped: it resets that game's settings with
     // no alert, so a test can check what it deletes and the next start's seeding. `scale-<0|1|2>` picks that
     // legacy backing scale (0 is Automatic) for compatibility with existing developer runs.
     // `files-<flavor>` is that game's Open in Files tapped. `region-<flavor>-<us|eu|kr|tw>` picks that game's
-    // Region, saved as a pick is (one the Mac decides logs that it can't). Once, when the sheet has appeared.
+    // Region, saved as a pick is (one the Mac decides logs that it can't). `addons-<flavor>` is that game's Addons
+    // page, `addons-browse-<flavor>` its catalog, and `addons-link-<flavor>` Add from GitHub's field;
+    // `addon-install-<flavor>-<catalog id>`, `addon-update-` and `addon-remove-<flavor>-<id>`, and `addon-link-<flavor>-<owner/repo>`
+    // are those taps (a real install or removal, as a tap's is), the install with its dependency ask, the
+    // removal with no confirmation. `relaunch` is a game's Exit Game:
+    // the app opens again on the start screen (sp_relaunch), else it exits. Once, when the sheet has appeared.
     private func presentDrill(_ screen: UIViewController) {
         screen.modalPresentationStyle = .fullScreen
         host?.present(screen, animated: false)
+    }
+
+    // The Apple sign-in's screen in one of its steps, with blocks that do nothing.
+    private func appleDrill(_ step: [String: Any]) {
+        let screen = appleScreen(sp_device_noun() as NSString, "https://mac-ani.jkcoxson.com", { _, _, _ in "A drill: nothing was sent." },
+                                 { _, _, _ in }, {}, {})
+        appleScreenShow(screen, step as NSDictionary)
+        presentDrill(screen)
     }
 
     func runDrill() {
@@ -281,7 +310,7 @@ final class Settings: ObservableObject {
         drill = nil
         let states: [String: () -> Void] = [
             "settings": {},
-            "game-updates": { self.push(.games, [.gameUpdates]) },
+            "signing": { self.push(.account) },
             "controls": { self.push(.controls) },
             "joystick": { self.push(.controls, [.joystick]) },
             "right-click": { self.push(.controls, [.rightClick]) },
@@ -300,10 +329,18 @@ final class Settings: ObservableObject {
                 pairAsk(screen, true)
                 self.presentDrill(screen)
             },
+            "apple-sign-in": { self.appleSignIn() },
+            "apple-sign-in-code": { self.appleDrill(["step": "code", "numbers": [["id": 1, "number": "(•••) •••-••12"]]]) },
+            "apple-sign-in-texts": {
+                self.appleDrill(["step": "code", "sms": true, "selected": 1, "retry": true,
+                                 "numbers": [["id": 1, "number": "(•••) •••-••12"], ["id": 2, "number": "+44 ••••• ••••34"]]])
+            },
+            "apple-sign-in-done": { self.appleDrill(["step": "done"]) },
             "acknowledgements": { self.push(.about, [.acknowledgements]) },
             "alert-forget-signin": { self.confirmation = .forgetSignIn },
-            "alert-forget-identity": { self.confirmation = .forgetIdentity },
+            "alert-forget-apple-token": { self.confirmation = .forgetAppleToken },
             "alert-reset": { if let f = self.flavors.first { self.confirmation = .reset(f) } },
+            "relaunch": { sp_relaunch(); exit(0) },
         ]
         var open = states[state]
         let suffix = { (prefix: String) -> String? in state.hasPrefix(prefix) ? String(state.dropFirst(prefix.count)) : nil }
@@ -311,6 +348,17 @@ final class Settings: ObservableObject {
             open = { say(sp_game_reset(f)); self.reload(); self.push(.games, [.game(f)]) }
         }
         if open == nil, let f = suffix("files-"), flavors.contains(f) { open = { self.openInFiles(f) } }
+        if open == nil, let f = suffix("addons-"), flavors.contains(f) { open = { self.push(.games, [.game(f), .addons(f)]) } }
+        if open == nil, let f = suffix("addons-browse-"), flavors.contains(f) { open = { self.push(.games, [.game(f), .addons(f), .browse(f)]) } }
+        if open == nil, let f = suffix("addons-link-"), flavors.contains(f) {
+            open = { self.push(.games, [.game(f), .addons(f)]); self.addons(f).linkShown = true }
+        }
+        // addon-<install|update|remove|link>-<flavor>-<id or link>: that tap, on the game's Addons page.
+        for action in ["install", "update", "remove", "link"] where open == nil {
+            guard let rest = suffix("addon-\(action)-"), let f = flavors.first(where: { rest.hasPrefix($0 + "-") }) else { continue }
+            let id = String(rest.dropFirst(f.count + 1))
+            open = { self.push(.games, [.game(f), .addons(f)]); self.addons(f).drill(action, id) }
+        }
         if open == nil, let rest = suffix("region-"), let dash = rest.lastIndex(of: "-"), flavors.contains(String(rest[..<dash])) {
             let f = String(rest[..<dash]), r = String(rest[rest.index(after: dash)...])
             open = { self.setRegion(f, r); self.push(.games, [.game(f)]) }
@@ -335,7 +383,7 @@ final class Settings: ObservableObject {
 
 // ---- the views
 
-private struct DoneButton: ToolbarContent {
+struct DoneButton: ToolbarContent {
     let settings: Settings
     var body: some ToolbarContent {
         // .confirm: the system's Done, a checkmark, as UIKit's UIBarButtonSystemItemDone draws it.
@@ -378,6 +426,8 @@ struct SettingsView: View {
                         case .acknowledgements: AcknowledgementsView(settings: settings)
                         case .license(let license):
                             LicenseView(license: license).navigationTitle(license.name).toolbar { DoneButton(settings: settings) }
+                        case .addons(let f): AddonsView(addons: settings.addons(f), settings: settings)
+                        case .browse(let f): AddonBrowseView(addons: settings.addons(f), settings: settings)
                         default:
                             List { pageContent(page) }
                                 .listStyle(.insetGrouped)
@@ -419,8 +469,9 @@ struct SettingsView: View {
                     }
                 }
             }
-            Section { NavigationLink("Game Updates", value: Page.gameUpdates) }
-        case .account: battleNet
+        case .account:
+            battleNet
+            signing
         case .about: about
         }
     }
@@ -431,7 +482,7 @@ struct SettingsView: View {
         case .rightClick: "Right-click Button"
         case .keyboard: "Keyboard Buttons"
         case .game(let flavor): sp_flavor_name(flavor)
-        case .gameUpdates: "Game Updates"
+        case .addons, .browse: "Addons"
         case .acknowledgements: "Acknowledgements"
         case .license(let license): license.name
         }
@@ -446,7 +497,6 @@ struct SettingsView: View {
         #endif
         case .game(let flavor):
             if let selected = settings.now.games.first(where: { $0.flavor == flavor }) { game(selected) }
-        case .gameUpdates: gameUpdates
         default: EmptyView()
         }
     }
@@ -490,7 +540,7 @@ struct SettingsView: View {
     private var title: String {
         switch settings.confirmation {
         case .forgetSignIn: "Forget Your Battle.net Sign-In?"
-        case .forgetIdentity: "Forget Signing Identity?"
+        case .forgetAppleToken: "Forget the Apple Token?"
         case .reset(let flavor): "Reset \(sp_flavor_name(flavor)) Settings?"
         case nil: ""
         }
@@ -504,8 +554,7 @@ struct SettingsView: View {
     private func message(_ c: Confirmation) -> String {
         switch c {
         case .forgetSignIn: "You’re asked to sign in the next time a game starts."
-        case .forgetIdentity:
-            "Your Mac’s companion turns Update Games on This Device off for this device. Turning it back on there puts the identity back."
+        case .forgetAppleToken: "Slashplayed stops renewing its own signing. To renew it again, sign in to Apple here, or run Slashplayed Companion on a computer."
         case .reset: "Graphics, sound, and other game settings go back to their defaults. Keybindings, macros, and addon settings are kept."
         }
     }
@@ -534,37 +583,30 @@ struct SettingsView: View {
         }
     }
 
-    @ViewBuilder private var gameUpdates: some View {
-        let r = settings.now.identity
-        let state = r?.state ?? .none
+    // Signing: until when the app opens, and the Apple token it renews that with (spapple.m), which
+    // slashplayed-companion pushes or the launcher's own sign-in makes: Sign In to Apple… when there's none
+    // (or Apple stopped taking it), opt-in, its screen saying what it is. The token's forget acts at the tap,
+    // after an alert whose default is Cancel.
+    private var signing: some View {
         Section {
-            switch state {
-            case .none, .forgotten:
-                LabeledContent("Signing Identity", value: "None").id("game-updates")
-            case .present:
-                LabeledContent("Signing Identity", value: "Valid until " + mediumDate(r?.notAfter)).id("game-updates")
-                LabeledContent("Signs Game Updates", value: r?.listed == true ? "Yes" : "No")
-            case .expired:
-                LabeledContent("Signing Identity") { Text("Expired " + mediumDate(r?.notAfter)).foregroundStyle(.red) }.id("game-updates")
-            case .unreadable:
-                LabeledContent("Signing Identity") { Text("Can’t Be Opened").foregroundStyle(.red) }.id("game-updates")
-            @unknown default:
-                LabeledContent("Signing Identity", value: "Unknown").id("game-updates")
+            if let until = settings.now.signedUntil {
+                LabeledContent("Signed Until", value: until.formatted(date: .abbreviated, time: .omitted))
+                    .id("signing")
             }
-            if state != .none && state != .forgotten {
-                Button("Forget Signing Identity", role: .destructive) { settings.confirmation = .forgetIdentity }
+            if !settings.now.appleToken || settings.now.needsSignIn {
+                Button("Sign In to Apple…") { settings.appleSignIn() }
+            }
+            if settings.now.appleToken {
+                Button("Forget Apple Token", role: .destructive) { settings.confirmation = .forgetAppleToken }
             }
         } header: {
-            Text("Game Updates")
+            Text("Signing")
         } footer: {
-            switch state {
-            case .none, .forgotten: Text("Turn on Update Games on This Device in the companion on your Mac to put one here.")
-            case .present:
-                Text(r?.listed == true ? "Games update on this device without your Mac."
-                                       : "The app’s profiles don’t list this identity, so it can’t sign game updates.")
-            case .unreadable: Text("A signing identity is in the keychain, but it can’t be opened.")
-            default: EmptyView()
-            }
+            Text(settings.now.appleToken && !settings.now.needsSignIn
+                 ? "Slashplayed renews its signing itself in the last 3 days, when a game starts, with an Apple token kept on this device. It isn’t your Apple ID password."
+                 : settings.now.appleToken
+                 ? "Apple no longer takes this device’s Apple token. Sign in to Apple again, or run Slashplayed Companion before then, to keep Slashplayed opening."
+                 : "Run Slashplayed Companion again before then to keep Slashplayed opening. Or sign in to Apple here, optionally, so Slashplayed renews its signing itself: a second sign-in to your Apple ID, through a third-party server.")
         }
     }
 
@@ -695,7 +737,8 @@ struct SettingsView: View {
         }
     }
 
-    // Finger chords (spevent.m): two fingers right-click, three middle-click, at one finger's spot.
+    // Finger chords (spevent.m): two fingers right-click, three middle-click, at one finger's spot; two held
+    // still open the edit menu (Copy, Paste, and Keyboard) as they lift.
     private var touch: some View {
         Section {
             Toggle("Show R Button", isOn: Binding(get: { settings.now.thumbEnabled }, set: {
@@ -717,7 +760,10 @@ struct SettingsView: View {
             .disabled(!settings.now.thumbEnabled)
             .id("touch")
         } footer: {
-            Text("Hold R while tapping or dragging with a finger or Apple Pencil to right-click. The right button stays held until that touch lifts, even if you release R first. Drag R to move it. Size and position are saved on this device.")
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Hold R while tapping or dragging with a finger or Apple Pencil to right-click. The right button stays held until that touch lifts, even if you release R first. Drag R to move it. Size and position are saved on this device.")
+                Text("Press with two fingers together to right-click, or three to middle-click. The click is where the left or right finger is. Hold two fingers still for a moment, then lift them, for Copy, Paste, and Keyboard. With Accessibility Zoom on, three-finger presses lag.")
+            }
         }
     }
     #endif
@@ -725,10 +771,12 @@ struct SettingsView: View {
     private func game(_ g: Snapshot.Game) -> some View {
         Section {
             VStack(alignment: .leading, spacing: 2) {
-                if g.installed {
-                    Text(g.version.map { "Build " + $0 } ?? "Build Unknown")
-                    Text(!g.updated ? "Shipped with the app" : g.shipped ? "Updated on this device" : "Installed on this device")
-                        .font(.subheadline).foregroundStyle(.secondary)
+                if g.installed, let version = g.version {
+                    Text("Build " + version)
+                    Text(sourceText(g)).font(.subheadline).foregroundStyle(.secondary)
+                } else if g.installed {
+                    Text("Not Ready")
+                    Text("Its next start gets it ready.").font(.subheadline).foregroundStyle(.secondary)
                 } else {
                     Text("Not Installed")
                     Text("Install \(g.name) on the start screen to play it.").font(.subheadline).foregroundStyle(.secondary)
@@ -746,14 +794,27 @@ struct SettingsView: View {
             } else {
                 LabeledContent("Region", value: sp_region_name(g.region))
             }
+            if g.installed { NavigationLink("Addons", value: Page.addons(g.flavor)) }
             Button("Open in Files") { settings.openInFiles(g.flavor) }
             Button("Reset Game Settings", role: .destructive) { settings.confirmation = .reset(g.flavor) }
         } header: {
             Text(g.name)
         } footer: {
+            // About the region only: the build row above says where the client came from.
             Text(g.regionHere
                  ? "Region is where your realms are. The game’s language follows this \(sp_device_noun())’s. A change applies the next time the game starts."
-                 : "\(g.name) came from your Mac. To change its region, change it in Battle.net on your Mac, then press Play in Slashplayed Companion.")
+                 : "\(g.name)’s region is set in Battle.net on your Mac. To change it, change it there, then press Play in Slashplayed Companion.")
+        }
+    }
+
+    // Where the game's client came from. One with no word (none of today's writers leaves it out) reads as
+    // the device's own: installed for a game whose region the device decides (it installed it), else updated.
+    private func sourceText(_ g: Snapshot.Game) -> String {
+        switch g.source {
+        case "mac": "From your Mac"
+        case "updated": "Updated on this device"
+        case "installed": "Installed on this device"
+        default: g.regionHere ? "Installed on this device" : "Updated on this device"
         }
     }
 
@@ -811,6 +872,7 @@ struct LicenseView: UIViewRepresentable {
 // a swipe) or the start screen goes (a game starts).
 final class SettingsHost: UIHostingController<SettingsView> {
     let settings: Settings
+    var closed: (() -> Void)?
 
     init(settings: Settings) {
         self.settings = settings
@@ -829,14 +891,16 @@ final class SettingsHost: UIHostingController<SettingsView> {
         super.viewDidDisappear(animated)
         if isBeingDismissed || presentingViewController?.isBeingDismissed == true || presentingViewController == nil {
             settings.hideEmail()
+            closed?()
         }
     }
 }
 
 @_cdecl("sp_settings_sheet")
-public func settingsSheet(_ flavors: NSArray, _ drill: NSString?) -> UIViewController {
+public func settingsSheet(_ flavors: NSArray, _ drill: NSString?, _ closed: @escaping @convention(block) () -> Void) -> UIViewController {
     let settings = Settings(flavors: flavors.compactMap { $0 as? String }, drill: drill as String?)
     let host = SettingsHost(settings: settings)
+    host.closed = closed
     settings.host = host
     Settings.shown = settings
     // Pinned Dark, as every launcher screen, so its stock controls suit the start screen.

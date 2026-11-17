@@ -8,6 +8,10 @@ All notable changes to Slashplayed are documented here. The format is based on
 
 ### Added
 
+- With a game controller connected, the touch controls step aside: the joystick, R, and the keyboard
+  buttons hide, and SPTouchBars hides its bars and returns the normal ones on the controller's first
+  button press. They come back when the controller disconnects. `/sptouch pad` turns the addon's part off.
+
 - Slashplayed Enhanced fork documentation, bringing the iPad interaction and UI improvements together
   with source-build instructions and clear credit to the original project.
 
@@ -70,6 +74,133 @@ All notable changes to Slashplayed are documented here. The format is based on
 - Building from source works when the Rust toolchain path contains spaces.
 - slashplayed-companion no longer stops with "…helper's profile grants … which it shouldn't" on a paid team
   whose Slashplayed helper has the memory capabilities turned on, as Xcode's setup can leave it.
+## [1.6.1] - 2026-11-14
+
+### Fixed
+
+- Exit Game and Quit in a game bring back Slashplayed's start screen again, instead of leaving you on
+  the Home Screen.
+- On cellular data, an iPhone or iPad no longer sits on "Turn on LocalDevVPN" while LocalDevVPN is
+  already on. LocalDevVPN works only on Wi-Fi, so Slashplayed now says so: join a Wi-Fi network, or
+  turn on Airplane Mode until the game starts loading, then turn it off again. The game starts by
+  itself either way, with no restart needed.
+  ([#72](https://github.com/paulstraw/slashplayed/issues/72))
+
+## [1.6.0] - 2026-11-14
+
+### Added
+
+- Copy and paste in the game's chat and other text boxes: Cmd+V on a keyboard pastes your iPad's,
+  iPhone's, or Vision Pro's clipboard, and what you copy in the game lands on it. Pasting from another
+  app asks first, unless Paste from Other Apps is set to Allow in Settings > Slashplayed.
+- Copy and paste by touch on an iPad or iPhone: hold two fingers still on the game's text box for a
+  moment and lift them, and a menu offers Copy and Paste. Pasting from another app this way doesn't ask
+  first.
+- An on-screen keyboard in the game on an iPad or iPhone. It comes up when a text box in the game takes
+  focus, such as chat after you choose Say, and goes away when you send the line. On an iPhone the game
+  zooms onto the box so you can see what you type. The same two-finger menu's Keyboard opens chat, or
+  brings up the keyboard on the login and character screens. Its microphone key dictates.
+- Addons for each game in Slashplayed's Settings: browse Slashplayed's addon catalog and install from
+  it, add an addon from a GitHub link, and update or remove what Slashplayed installed. Addons it
+  installed update themselves when Slashplayed opens, unless you turn Update Automatically off. Addons
+  you added in Files are listed too, and the ones the catalog has can be updated from it.
+- Quitting a game (Exit Game or Quit) brings back Slashplayed's start screen, so you can switch games or
+  change addons without closing the app from the app switcher.
+- Swiping on a DualSense or DualShock 4 touchpad presses F16 (up), F17 (down), F18 (left), or F19
+  (right), so you can bind them in addons that take key bindings.
+
+### Changed
+
+- M1 iPads and the A17 Pro iPad mini are no longer marked untested: players have played on both. The
+  Mac companion no longer shows its "Untested" note for them.
+
+### Fixed
+
+- A game copied from a Mac that plays outside the Americas now signs in to its own region on the iPad,
+  iPhone, or Vision Pro. Before, the device's first copy of the game's settings always named the Americas,
+  so an account that plays in Europe, Korea, or Taiwan could be told it has no active account. A game
+  already copied that way moves to the Mac's region and languages the next time it starts, with nothing to
+  copy again.
+- What you type on a hardware keyboard, such as a password or authenticator code in the game's own
+  login screen, no longer goes into the device log that Pull Device Logs fetches. The log still notes
+  keys that don't type text, such as Shift, Return, and the arrows, and clicks. The first start after
+  this update deletes the device logs kept from before it, which could hold what was typed then.
+
+### Known issues
+
+- Signing in on the device can fail with "You have been disconnected. (BLZ51914400)", sometimes after
+  a captcha, when Battle.net turns the sign-in down after accepting the email and password. Why it does
+  isn't known yet ([#76](https://github.com/paulstraw/slashplayed/issues/76)). Check your email for an
+  "account locked" or suspicious-login message from Blizzard, and don't try again many times in a row.
+  On a device set up from a Mac, Play with My Mac's Battle.net signs in; from Windows or Linux there's
+  no workaround yet.
+
+## [1.5.1] - 2026-11-12
+
+### Fixed
+
+- A game installed on an iPad or iPhone for Europe in English, or in a language the game doesn't have,
+  no longer closes a moment after it starts. A game already installed that way plays after this
+  update, without installing it again.
+
+## [1.5.0] - 2026-11-12
+
+### Added
+
+- The Slashplayed Companion for Windows and Linux, experimental for now: set up Slashplayed on an iPad or
+  iPhone from a Windows or Linux computer, in a window that walks you through it, from plugging in the
+  device and signing in with your Apple ID and its code to the app on your device. Download it from the
+  release next to the Mac companion. slashplayed-cli, in the same download, does the same from a terminal.
+- An iPad or iPhone set up from Windows or Linux keeps itself signed. On a free Apple ID, Slashplayed
+  renews its own signing over the internet when a game starts in the last 3 days before it runs out, so
+  you don't run the tool again every week. If a game starts then and it can't, the start screen says so
+  and on which day the app stops opening.
+- Settings on the device shows until when Slashplayed is signed and, on a device set up from Windows or
+  Linux, has Forget Apple Token, which stops it renewing its own signing.
+- Sign In to Apple on the iPad, iPhone, or Vision Pro, so Slashplayed renews its own signing without a
+  computer, including when it was set up with the Mac companion. It's optional, in Settings > Signing and
+  under the start screen's note when renewing needs it. It's a second sign-in to your Apple ID, with its
+  two-factor code, through a third-party anisette server, as sideloading tools do, so a secondary Apple ID
+  on the team is safest. Your password is used once and isn't kept: only an Apple token is, in the
+  device's keychain.
+- On an iPad or iPhone, the game runs in Game Mode, with less background activity and lower latency
+  for a Bluetooth controller and AirPods, and Settings can remap a game controller's buttons for
+  Slashplayed.
+
+### Changed
+
+- A game patch no longer rebuilds and reinstalls Slashplayed. Play copies just the new game client to
+  your iPad, iPhone, or Vision Pro, in a few seconds, and ticking or unticking a game no longer rebuilds
+  it either.
+- Updating and installing games on the iPad, iPhone, or Vision Pro works on every team, free Apple IDs
+  included, with nothing to turn on: when a new build is out, the device offers Update and sets it up in
+  seconds.
+- Settings on the device says where each game came from: From your Mac, Updated on this device, or
+  Installed on this device.
+- The first time each game starts after this update, the device downloads that game's client once (50 to
+  58 MB) as "Getting <game> ready…", since Slashplayed no longer carries the games inside the app. It
+  needs the network that one time. Pressing Play in the companion first copies it from your Mac instead.
+- Setup Assistant's Apple Account step says what the account is for: Slashplayed signs the app with its
+  team, so your devices will run it.
+
+### Removed
+
+- Update Games on This Device, the signing key it sent to your device, and the Slashplayed certificate:
+  they're no longer needed. The companion's Updates on Devices settings and Setup Assistant's updates
+  step are gone, the key is deleted from your device the first time Slashplayed starts there, and the
+  certificate's key from your Mac the first time the companion starts. On a paid team, you can revoke the
+  "Slashplayed" certificate on Apple's developer site (Certificates, IDs & Profiles > Certificates).
+- The Slashplayed Companion for Windows and Linux no longer sends a signing key to your iPad or iPhone:
+  the device installs and updates games without one.
+
+### Fixed
+
+- On the Vision Pro, a game controller now plays the game: its sticks, triggers, and buttons reach the
+  game, and its buttons no longer click wherever you're looking. The look highlights are off while a
+  controller is connected.
+- The Slashplayed Companion for Windows and Linux no longer stops with "…helper's profile grants … which
+  it shouldn't" on a paid team whose Slashplayed helper has the memory capabilities turned on, as Xcode's
+  setup can leave it.
 - The iPad mini (A17 Pro) was refused as an iPad that can't run the game, though it has the iPhone
   15 Pro's chip and 8 GB of memory. It can now be picked and played on. It hasn't been played on yet,
   so the companion marks it untested, as it does M1 iPads: if you try one, please report how it goes,
@@ -79,6 +210,8 @@ All notable changes to Slashplayed are documented here. The format is based on
   installs another game into the same folder. Before, the companion said those games weren't the build
   Blizzard has out now and left the device's game data as it was, and it couldn't show how much space
   they'd take.
+- Setup Assistant's Install Slashplayed step no longer says a device is up to date when the next Play
+  would build and install the app again, as it does after a companion update. It offers Update instead.
 
 ## [1.4.0] - 2026-11-06
 

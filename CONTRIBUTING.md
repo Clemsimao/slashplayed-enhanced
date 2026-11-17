@@ -7,8 +7,9 @@ interaction you are improving, and include iPad screenshots when available.
 
 Thanks for helping out. Slashplayed has three parts: the Mac companion app (`apps/companion`), the
 device app (`apps/client`), and the shim libraries the device app loads (`shims/`).
-[docs/architecture.md](docs/architecture.md) explains how they fit together. Read it before you change
-the pipeline, the shims, or the launcher.
+[docs/architecture.md](docs/architecture.md) explains how they fit together, and
+[docs/internals/](docs/internals/README.md) has each part in detail. Before you change the pipeline, the
+shims, or the launcher, read the internals page that covers it.
 
 ## Setup
 
@@ -24,13 +25,14 @@ Install these first:
   a Vision Pro, an M1-or-later iPad or the A17 Pro iPad mini, or an iPhone 15 Pro or later, paired, with Developer Mode on;
   and [LocalDevVPN](https://apps.apple.com/app/id6755608044) on the device.
 
-Then, from a fresh clone (the first three steps are once, and again after their pins change):
+Then, from a fresh clone (idevice, spapple, and the font are once, and again after their pins change;
+spapple also after a change to `apps/client/spapple`):
 
 ```sh
 scripts/build-idevice.sh macos   # idevice, from source, into work/idevice/
 scripts/build-idevice.sh ios
 scripts/build-idevice.sh xros
-scripts/build-zsign.sh           # zsign and OpenSSL, into work/zsign/
+scripts/build-spapple.sh         # the device app's profile renewal, from source, into work/spapple/
 scripts/fetch-font.sh            # the start screen's font, into work/fonts/
 apps/companion/build.sh          # build/companion/Slashplayed Companion.app, shims included
 apps/companion/test.sh           # the companion's unit tests
@@ -74,8 +76,9 @@ client from Blizzard's CDN. It needs no configuration and no game install on the
   broken game patch, use the "New game patch broke it" issue form (the companion's **Report It…** link
   fills it in).
 - Keep each PR to one focused change.
-- CI must pass: the tree checks, the addon tests, idevice and zsign built from source, the unsigned
-  companion build (with the shims for both platforms), and the companion tests.
+- CI must pass: the tree checks, the addon tests, idevice built from source, the unsigned companion
+  build (with the shims for both platforms), the companion tests, the guest loader's test, and
+  slashplayed-companion's build and tests on Linux and Windows.
 - Say what you tested and how: unit tests, and which game on which device and OS version. Reviewers
   can't see your device, so describe anything that only shows there.
 - Attach logs only from **Help > Export Diagnostics…**. It leaves out credentials and blanks device
@@ -95,17 +98,16 @@ client from Blizzard's CDN. It needs no configuration and no game install on the
   sign-in, `apps/client/splogin.m`, handles them), signing identities (`.p12` files and their
   passwords), and pairing records. Files that hold them are 0600 and deleted once copied.
 - **The scrub line.** Apple-platform findings are welcome in full (the ones in
-  [docs/architecture.md](docs/architecture.md)). Client internals are not: no offsets into the client,
+  [docs/internals/](docs/internals/README.md)). Client internals are not: no offsets into the client,
   no addresses of its functions, and nothing about credential formats. Describe the client at the level
-  architecture.md does, for example "the client rewrites its own code at startup; the shim services that
+  the docs do, for example "the client rewrites its own code at startup; the shim services that
   through an alias mapping".
 
 [CLAUDE.md](CLAUDE.md) has the full rules.
 
 ## Advanced
 
-The dev scripts and `config/local.env`, the client assembly that must stay byte-identical in three
-places, the opt-in tests against a real install, and the steps after a game patch are in
+The dev scripts and `config/local.env`, the device app's assembly in two places, the opt-in tests against a real install, and the steps after a game patch are in
 [docs/maintaining.md](docs/maintaining.md).
 
 By contributing, you agree that your contributions are licensed under the [MIT License](LICENSE).

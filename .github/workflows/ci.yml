@@ -18,8 +18,8 @@ permissions:
   contents: read
 
 # A newer push to a PR supersedes its older run, so that one is cancelled. A push to main never is: main's
-# runs are the only ones that save the idevice and zsign caches every PR reads (caches are ref-scoped), and
-# a cancelled run saves nothing, so a few merges in a row would leave every PR rebuilding both from source.
+# runs are the only ones that save the idevice cache every PR reads (caches are ref-scoped), and a
+# cancelled run saves nothing, so a few merges in a row would leave every PR rebuilding it from source.
 concurrency:
   group: ci-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -37,21 +37,18 @@ env:
   # static.rust-lang.org publishes next to the binary (rustup-init.sha256).
   RUSTUP_VERSION: 1.29.2
   RUSTUP_SHA256: f7c7e11eb2e07f006e532a8aaac77b32f4527d305ac386c0c633ca6133d35ca9
-  # What the idevice and zsign caches hold (.github/actions/companion-deps, Restore idevice), shared by
-  # each one's restore and save in both companion jobs.
+  # What the idevice and spapple caches hold (.github/actions/companion-deps, Restore idevice and Restore
+  # spapple), shared by each one's restore and save in both companion jobs.
   IDEVICE_CACHE_PATHS: |
     work/idevice/BUILD.txt
     work/idevice/include
     work/idevice/ios
     work/idevice/xros
     work/idevice/macos
-  ZSIGN_CACHE_PATHS: |
-    work/zsign/BUILD.txt
-    work/zsign/licenses
-    work/zsign/src/zsign/src
-    work/zsign/ios
-    work/zsign/xros
-    work/zsign/macos
+  SPAPPLE_CACHE_PATHS: |
+    work/spapple/BUILD.txt
+    work/spapple/ios
+    work/spapple/xros
 
 jobs:
   # Greps only, so a scrub or hardcoding slip fails in seconds rather than after the builds.
@@ -65,7 +62,7 @@ jobs:
       - name: Scrub and no-hardcoding checks
         run: scripts/check-tree.sh
 
-  # The addons against mock WoW APIs: SPHover through the shim's own pixel-strip decoder, SPMovie's
+  # The addons against mock WoW APIs: SPHover and SPKeyboard through the shim's own pixel-strip decoder, SPMovie's
   # tap (addon/test/test.sh). Lua 5.1, the version WoW embeds, so a 5.2+ idiom in an addon fails here
   # rather than in the game; the maintainer's Mac runs Homebrew's 5.4, so between them both are covered.
   # Not gated by changes: it takes seconds on Linux, and an ungated job never sits skipped.
@@ -152,7 +149,7 @@ jobs:
   # The companion's build and its tests, as two jobs on two runners so the run takes about as long as
   # the slower of them rather than both in a row: test.sh builds into its own DerivedData (Debug, beside
   # build.sh's Release) and reads none of build.sh's output. Both stand on the
-  # same pinned Xcode, XcodeGen, idevice, and zsign, from one local action so their caches stay shared.
+  # same pinned Xcode, XcodeGen, and idevice, from one local action so their cache stays shared.
   companion-build:
     needs: changes
     # !cancelled() rather than the implicit success(): if changes fails, its output is empty, and a job
@@ -179,8 +176,8 @@ jobs:
       # and the icon, into staging (build/companion/resources) in the background while xcodebuild
       # compiles the app, names the platform whose build failed, and --install then copies them into the
       # app. (Steps of their own here built the same shims a second time.)
-      # The notices the built app ships (Sparkle's, idevice's, zsign's, OpenSSL's, and the font's) are
-      # checked inside this step too: bundle-resources.sh compares its own output, file for file, against
+      # The notices the built app ships (Sparkle's, idevice's, and the font's) are checked inside this
+      # step too: bundle-resources.sh compares its own output, file for file, against
       # apps/companion/bundled-notices.txt and work/. (A test here once did that, compiling a Debug app
       # and test bundle on this runner for it; companion-test holds ClientAssembly's lists to that file.)
       - name: Build the companion (unsigned)
@@ -198,19 +195,34 @@ jobs:
           persist-credentials: false
 
       # idevice for every platform (test.sh's idevice-config.sh links the macOS one; AcknowledgementsTests
-      # checks all three archives' notices) and zsign for macOS (DeviceSigningTests runs spsign.m on the
-      # Mac). No font and no shims: the fixtures are built from research/loadertest and the committed
-      # shims/generated/rewrite-map.txt, and the tests that read build/<platform>/exports.json are opt-in.
+      # checks all three archives' notices). No font and no shims: the fixtures are built from
+      # research/loadertest and the committed shims/generated/rewrite-map.txt, and the tests that read
+      # build/<platform>/exports.json are opt-in.
       - uses: ./.github/actions/companion-deps
+
+      # spguest, the launcher's loader (apps/client/spguest.c), loading the guest toy on this runner's
+      # macOS: its checks (constructors, Objective-C, exceptions, thread-locals, binds, self-queries, a
+      # 44 MB __TEXT) fail the step, and so does a broken copy of the toy (a cmdsize that wraps, a command
+      # shorter than its struct, a segment larger in the file than in memory, bind opcodes cut short) that
+      # spguest takes or crashes on (guesttest/malformed.c). SP_GUEST_REFS=none builds the toy from our own
+      # code alone, with no game's imports (those need a local recon and client); clang, dyld_info, and an
+      # ad hoc codesign are all it needs. It also shows the private hooks spguest registers through
+      # (_objc_map_images, _objc_load_image, __unw_add_find_dynamic_unwind_sections) still work on the
+      # runner's macOS. Seconds, so a step here rather than a job of its own on another macOS runner.
+      - name: Test the guest loader
+        env:
+          SP_GUEST_REFS: none
+        run: apps/client/guesttest/build.sh mac
 
       - name: Test the companion
         run: apps/companion/test.sh
 
-  # The host tool, slashplayed-companion (apps/companion-rs), on the two systems it's for: its unit tests and a
-  # release build, from source as a volunteer would build it. zsign's patched source comes from
-  # scripts/build-zsign.sh source (git only); build.rs compiles it with OpenSSL from openssl-src. On
-  # Linux, the crates' notices too, which fail on a GPL-family crate (the binary links statically:
-  # apps/companion-rs/vendor/isideload/VENDORED.md). Gated like the companion jobs.
+  # The host tool (apps/companion-rs: the window, slashplayed-companion, and slashplayed-cli) on the two systems
+  # it's for: its unit tests and a release build, from source as a volunteer would build it. zsign's patched
+  # source comes from scripts/build-zsign.sh source (git only); spzsign (zsign/build.rs) compiles it with
+  # OpenSSL from openssl-src. Then package.sh, as a release runs it: the crates' notices, which fail on a GPL-family
+  # crate (the binaries link statically: apps/companion-rs/vendor/isideload/VENDORED.md), and on Linux the
+  # check that neither program links a display library. Gated like the companion jobs.
   companion-rs:
     needs: changes
     if: ${{ !cancelled() && needs.changes.outputs.build != 'false' }}
@@ -218,7 +230,9 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
+          # 22.04, not latest: the binaries need the glibc they're built against or newer, and 22.04's
+          # 2.35 reaches Ubuntu 22.04, Debian 12, and SteamOS (24.04's would need 2.39).
+          - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             rustup_url: x86_64-unknown-linux-gnu/rustup-init
             rustup_sha256: 5be191e8c70a5007074254cb74d78dbfdd25cd5a61c27de7b8e5410122ec24f4
@@ -290,31 +304,37 @@ jobs:
           rustup toolchain list
           rustc -vV
 
-      # Cargo's output from main's last run: the crates, and build.rs's OpenSSL (openssl-src) and zsign,
+      # Cargo's output from main's last run: the crates, and spzsign's OpenSSL (openssl-src) and zsign,
       # which on a cold run are most of the job, twice (debug for the tests, release for the build), and
       # on Windows twenty minutes of it. Swatinem/rust-cache keys it on the runner, the compiler's
-      # version, rust-toolchain.toml, Cargo.toml and Cargo.lock, and the CARGO/CC/RUST env; `key` adds
-      # the target and what build.rs builds from that cargo can't see. build.rs tells cargo to rerun it
-      # only for spzsign_host.cpp and two env vars, so a changed scripts/build-zsign.sh pin or
+      # version, rust-toolchain.toml, the Cargo.tomls and Cargo.lock, and the CARGO/CC/RUST env; `key`
+      # adds the target and what spzsign builds from that cargo can't see. zsign/build.rs tells cargo to
+      # rerun it only for spzsign_host.cpp and SP_ZSIGN_SRC, so a changed scripts/build-zsign.sh pin or
       # scripts/zsign.patch (new zsign source in work/zsign/src) would otherwise reuse the old zsign and
       # OpenSSL. They're in `key`, not just the lockfile part of the key, because rust-cache falls back
       # to any cache with the same `key` and env and a different lockfile: a zsign change has to miss
-      # outright, never land on an older build of it.
-      # cache-workspace-crates: OpenSSL and zsign are this crate's own build script's output, which
-      # rust-cache otherwise drops as a workspace crate's; without it the cache holds only the crates.
+      # outright, never land on an older build of it. So is all of zsign/, which the next step backdates.
+      # spzsign is a crate of its own at a fixed version because rust-cache leaves workspace crates'
+      # versions out of its key while cargo fingerprints a build script by its package's version: built
+      # by slashplayed-companion's build.rs, a release's version bump restored a full match that no
+      # longer counted, rebuilt OpenSSL, and saved nothing, on every run after it.
+      # cache-workspace-crates: spzsign is a workspace crate (a path crate inside apps/companion-rs), whose
+      # output rust-cache otherwise drops; without it the cache holds only the crates.
       # Saved only from main's pushes, as the companion's caches effectively are: a cache is scoped to the
       # ref that saved it, so main never reads a PR's (untrusted code can't reach main's builds), and a
       # PR's would serve only that PR's own reruns while spending the repository's cache space (these are
-      # hundreds of MB each, and an evicted idevice or zsign cache costs every PR its five minutes). PRs
+      # hundreds of MB each, and an evicted idevice cache costs every PR its five minutes). PRs
       # restore main's. companion-rs-build.yml, which builds what releases ship, uses no cache: those
       # builds stay cold, from source.
       - name: Restore cargo's output
         uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
         with:
           workspaces: apps/companion-rs -> target
-          key: ${{ matrix.target }}-${{ hashFiles('scripts/build-zsign.sh', 'scripts/zsign.patch', 'apps/companion-rs/build.rs', 'apps/companion-rs/zsign/**') }}
-          # build.rs and openssl-src read these (SP_ZSIGN_SRC, SP_KIT_SHA256, OPENSSL_SRC_PERL), so a
-          # change to one is a different build.
+          # matrix.os first: rust-cache keys on the OS's family, not its release, and a build from a newer
+          # Ubuntu (a newer glibc) mustn't restore onto 22.04.
+          key: ${{ matrix.os }}-${{ matrix.target }}-${{ hashFiles('scripts/build-zsign.sh', 'scripts/zsign.patch', 'apps/companion-rs/zsign/**') }}
+          # The build scripts and openssl-src read these (SP_ZSIGN_SRC, SP_KIT_SHA256, OPENSSL_SRC_PERL),
+          # so a change to one is a different build.
           env-vars: SP_ OPENSSL
           cache-workspace-crates: true
           # Nothing here is installed with cargo install; ~/.cargo/bin holds only rustup's proxies.
@@ -322,15 +342,21 @@ jobs:
           save-if: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
 
       # A checkout stamps every file with the time it was written, and cargo reruns a build script when
-      # a file it watches (build.rs itself, and spzsign_host.cpp) is newer than its last run: on every
-      # run, then, rebuilding OpenSSL and zsign from scratch and wasting the cache. Both files' contents
-      # are in the cache's key above, so a cache this run restored was built from exactly these bytes, and
-      # an old fixed date is safe. The crate's own sources keep their times, so it recompiles as it should.
+      # a file it watches (zsign/build.rs itself, and its rerun-if-changed spzsign_host.cpp) is newer than
+      # its last run: on every run, then, rebuilding OpenSSL and zsign from scratch and wasting the cache.
+      # Every file in zsign/ is in the cache's key above, so a cache this run restored was built from
+      # exactly these bytes, and an old fixed date is safe; the whole folder, so a file added there is
+      # covered too. slashplayed-companion's own sources and build.rs (the icon and SP_KIT_SHA256, which
+      # take seconds) keep their times, so they recompile as they should.
       - name: Let the cached build script stand
-        run: touch -d '2000-01-01T00:00:00Z' apps/companion-rs/build.rs apps/companion-rs/zsign/spzsign_host.cpp
+        run: touch -d '2000-01-01T00:00:00Z' apps/companion-rs/zsign/*
 
       - name: Fetch zsign's source
         run: scripts/build-zsign.sh source
+
+      # The window's title face, which package.sh puts beside it unchanged.
+      - name: Fetch the window's font
+        run: scripts/fetch-font.sh
 
       - name: Test slashplayed-companion
         working-directory: apps/companion-rs

@@ -1,47 +1,42 @@
-// slashplayed-companion: sets up Slashplayed on an iPad or iPhone from Windows, Linux, or a Mac, with no Xcode
-// and no Mac companion (docs/setup-without-a-mac.md; how it works: docs/architecture.md, "The host tool").
-// Run it again to re-sign: weekly on a free Apple ID, yearly on a paid one. Each run:
+// slashplayed-cli: sets up Slashplayed on an iPad or iPhone from Windows, Linux, or a Mac, with no Xcode
+// and no Mac companion (docs/setup-without-a-mac.md; how it works: docs/internals/host-tool.md).
+// Run it again to re-sign when the app can't renew its own profiles (its start screen says so). Each run:
 //
 //   1. the device kit (the device app, unsigned: kit.rs), downloaded and checked, before anything else;
 //   2. the device over USB: trusted by this computer, Developer Mode on (device.rs);
 //   3. the Apple ID sign-in, held in memory only, and the team (account.rs);
 //   4. the device, App IDs, capabilities, certificate, and profiles (provision.rs);
 //   5. the app signed with zsign (sign.rs) and installed over USB;
-//   6. the RemotePairing record, the developer disk image (ddi.rs), and the signing identity into its
-//      container, for the JIT helper and the device's own game installs.
+//   6. the RemotePairing record and the developer disk image (ddi.rs) into its container, for the JIT helper,
+//      and the Apple token, for the app to renew its own profiles (apps/client/spapple.m).
 //
-// The device does the rest: it installs and updates games itself and picks their region (PR #35, #41), so
-// this never writes .build.info, a region, or addons. Vision Pro stays Mac-only.
-
-mod account;
-mod ddi;
-mod device;
-mod keystore;
-mod kit;
-mod profile;
-mod provision;
-mod secret;
-mod sign;
+// The device does the rest: it installs and updates games itself, with no signing credential on it (it loads each
+// game's unchanged client with spguest, so nothing there is signed), and picks their region (PR #35, #41),
+// so this never writes .build.info, a region, or addons. Vision Pro stays Mac-only.
 
 use std::collections::HashMap;
 
+use isideload::{
+    auth::apple_account::{TwoFactorCallbackParams, TwoFactorCallbackResponse},
+    dev::teams::DeveloperTeam,
+};
 use rootcause::prelude::*;
+use slashplayed_companion::{
+    account, device,
+    flow::{self, Ask, CertLimit, DeviceInfo, Event, Frontend, SignIn, Wait},
+    keystore, kit, live, secret,
+};
 use zeroize::Zeroizing;
 
-/// One step's line, for the person running it.
-pub fn say(line: &str) {
-    eprintln!("- {line}");
-}
-
 const USAGE: &str = "\
-slashplayed-companion: set up Slashplayed on an iPhone or iPad without a Mac.
+slashplayed-cli: set up Slashplayed on an iPhone or iPad without a Mac.
 
 Usage:
-  slashplayed-companion [install] [options]   install or re-sign Slashplayed on the device on USB
-  slashplayed-companion devices               list the iPhones and iPads on USB
-  slashplayed-companion forget --apple-id <id>
+  slashplayed-cli [install] [options]         install or re-sign Slashplayed on the device on USB
+  slashplayed-cli devices                     list the iPhones and iPads on USB
+  slashplayed-cli forget --apple-id <id>
                                           delete this computer's signing key for that Apple ID
-  slashplayed-companion --version
+  slashplayed-cli --version
 
 Options for install:
   --apple-id <id>       the Apple ID to sign with (asked for if not given)
@@ -55,7 +50,8 @@ Options for install:
   --revoke-oldest       with no credential store, at the team's certificate limit: revoke the oldest
                         certificate a Slashplayed tool made, even another computer's
 
-Run it again to re-sign: within 7 days on a free Apple ID, within a year on a paid one.
+Slashplayed renews its own signing on the device when a game starts near its end. Run this again if
+its start screen says it can't.
 Your Apple ID password is used once for the sign-in and never stored.";
 
 struct Args {
@@ -97,15 +93,11 @@ impl Args {
 }
 
 fn main() {
-    // Before any thread exists: isideload reads this to put sensitive plists and the full email into its
-    // errors. No tracing subscriber is ever installed, so nothing it logs goes anywhere.
-    unsafe { std::env::remove_var("DEBUG_SENSITIVE") };
-    let _ = rustls::crypto::ring::default_provider().install_default();
-    let _ = isideload::init();
+    slashplayed_companion::init();
     let args = match parse(std::env::args().skip(1)) {
         Ok(a) => a,
         Err(e) => {
-            eprintln!("slashplayed-companion: {}", secret::safe_error(&e));
+            eprintln!("slashplayed-cli: {}", secret::safe_error(&e));
             std::process::exit(2);
         }
     };
@@ -114,12 +106,12 @@ fn main() {
         return;
     }
     if args.flag("--version") || args.command == "version" {
-        println!("slashplayed-companion {} (device kit: {})", env!("CARGO_PKG_VERSION"), kit::release_tag());
+        println!("slashplayed-cli {} (device kit: {})", env!("CARGO_PKG_VERSION"), kit::release_tag());
         return;
     }
     let runtime = tokio::runtime::Builder::new_multi_thread().enable_all().build().expect("tokio runtime");
     if let Err(e) = runtime.block_on(run(&args)) {
-        eprintln!("slashplayed-companion: {}", secret::safe_error(&e));
+        eprintln!("slashplayed-cli: {}", secret::safe_error(&e));
         std::process::exit(1);
     }
 }
@@ -148,105 +140,146 @@ async fn run(args: &Args) -> Result<(), Report> {
 }
 
 async fn install(args: &Args) -> Result<(), Report> {
-    // 1. The kit, first: a bad download shouldn't cost a sign-in.
-    let scratch = secret::Scratch::new("companion")?;
-    let (bytes, from) = kit::fetch(args.opt("--kit").map(std::path::Path::new)).await?;
-    let kit = kit::extract(&bytes, scratch.path())?;
-    drop(bytes);
-    say(&format!("device kit {} from {from}", kit.version));
-
-    // 2. The device.
-    let d = device::pick(args.opt("--udid")).await?;
-    say(&format!("{} ({}, iOS {})", d.name, d.class, d.os));
-    device::ensure_trusted(&d).await?;
-    device::ensure_developer_mode(&d).await?;
-
-    // 3. The Apple ID and team.
-    let apple_id = match args.opt("--apple-id") {
-        Some(id) => id.to_string(),
-        None => account::ask("Apple ID (email): ")?,
+    let opts = flow::Options {
+        kit: args.opt("--kit").map(std::path::Path::new),
+        team: args.opt("--team"),
+        bundle_id: args.opt("--bundle-id"),
+        anisette: args.opt("--anisette").unwrap_or(account::DEFAULT_ANISETTE),
+        server_client_info: args.flag("--server-client-info"),
     };
-    if apple_id.is_empty() {
-        bail!("no Apple ID given");
-    }
-    let anisette = args.opt("--anisette").unwrap_or(account::DEFAULT_ANISETTE);
-    say(&format!("signing in, with anisette from {anisette}"));
-    let mut session = account::sign_in(&apple_id, anisette, args.flag("--server-client-info")).await?;
-    let team = provision::pick_team(&mut session, args.opt("--team")).await?;
-    say(&format!("team {} ({})", team.name.as_deref().unwrap_or("?"), team.team_id));
-    let bundle_id = args.opt("--bundle-id").map(str::to_string).unwrap_or_else(|| format!("{}.slashplayed", team.team_id));
-    if !kit::valid_bundle_id(&bundle_id) {
-        bail!("{bundle_id} isn't a valid bundle ID (letters, digits, and hyphens, separated by dots)");
-    }
-
-    // 4. Provisioning.
-    provision::register_device(&mut session, &team, &d.usb, &d.name).await?;
-    let (app_id, helper_id) = provision::app_ids(&mut session, &team, &bundle_id).await?;
-    let eva = provision::capabilities(&mut session, &team, &app_id).await?;
-    let id = provision::identity(&mut session, &team, &apple_id, args.flag("--revoke-oldest")).await?;
-    let (app_profile, helper_profile, free) =
-        provision::profiles(&mut session, &team, &app_id, &helper_id, &d.usb.udid, &id, eva).await?;
-    drop(session);
-
-    // 5. Sign and install.
-    kit::set_bundle_id(&kit.app, &bundle_id)?;
-    let dropped: &[&str] = if free { kit::FREE_TEAM_DROPPED } else { &[] };
-    let app_ents = kit::entitlements(&kit.entitlements, &team.team_id, &bundle_id, dropped)?;
-    let helper_ents = kit::entitlements(&kit.helper_entitlements, &team.team_id, &kit::helper_id(&bundle_id), &[])?;
-    let key_pem = Zeroizing::new(
-        rsa::pkcs8::EncodePrivateKey::to_pkcs8_pem(&id.key, rsa::pkcs8::LineEnding::LF)
-            .map_err(|_| report!("couldn't encode the key"))?
-            .to_string(),
-    );
-    sign::sign_app(
-        &kit.app,
-        &sign::Inputs {
-            key_pem: &key_pem,
-            cert_der: &id.cert_der,
-            app_profile: &app_profile,
-            app_entitlements: &app_ents,
-            helper_profile: &helper_profile,
-            helper_entitlements: &helper_ents,
-        },
-    )?;
-    drop(key_pem);
-    say("signed");
-    let ipa = scratch.path().join("Slashplayed.ipa");
-    kit::ipa(&kit.app, &ipa)?;
-    say(&format!("installing on {} ({} MB)", d.name, std::fs::metadata(&ipa)?.len() / 1_000_000));
-    device::install(&d, &ipa).await?;
-    say("installed");
-
-    // 6. Into the container: the pairing record, the developer disk image, the signing identity.
-    let mut afc = device::container(&d, &bundle_id).await?;
-    let has_pairing = device::size(&mut afc, device::PAIRING_PATH).await.unwrap_or(0) > 0;
-    if has_pairing && !args.flag("--pair-again") {
-        say("the app already has a pairing record");
-    } else {
-        let size = device::send_pairing(&d, &mut afc).await?;
-        say(&format!("sent {} ({size} bytes)", device::PAIRING_PATH));
-    }
-    if !ddi::send_if_needed(&mut afc).await? {
-        say("the app already has this developer disk image");
-    }
-    // The .p12 first: the launcher imports only a whole pair, and deletes a half one (DeviceIdentity.swift).
-    let password = secret::p12_password();
-    let p12 = provision::p12(&id, &password)?;
-    device::put(&mut afc, "Library/spidentity.p12", &p12).await?;
-    device::put(&mut afc, "Library/spidentity.pass", password.as_bytes()).await?;
-    drop(p12);
-    drop(password);
-    say("sent the signing identity, for installing and updating games on the device");
-
-    eprintln!();
-    eprintln!("Slashplayed is on {}.", d.name);
-    if free {
-        eprintln!(
-            "It's signed with a free Apple ID: the first time, trust it in Settings > General > VPN & Device Management. Run this again within 7 days, or the app stops opening."
-        );
-    }
-    eprintln!("Open Slashplayed and tap a game to install it on the device.");
+    flow::install(&mut live::Live::new()?, &Cli(args), &opts).await?;
     Ok(())
+}
+
+/// One line from the person (stdin), for the Apple ID, team, and 2FA prompts.
+fn ask(prompt: &str) -> Result<String, Report> {
+    use std::io::{BufRead, Write};
+    eprint!("{prompt}");
+    std::io::stderr().flush()?;
+    let mut line = String::new();
+    if std::io::stdin().lock().read_line(&mut line)? == 0 {
+        bail!("no answer (the input ended)");
+    }
+    Ok(line.trim().to_string())
+}
+
+/// The command line's side of a run: lines on stderr, questions on stdin, and the flags for what the
+/// window would ask.
+struct Cli<'a>(&'a Args);
+
+impl Frontend for Cli<'_> {
+    fn report(&self, event: Event) {
+        match event {
+            Event::Say(line) => eprintln!("- {line}"),
+            // The device asks for Trust itself; the command line has never said more about it.
+            Event::Wait(Wait::Trust { .. }) => {}
+            Event::Wait(w) => eprintln!("{}", w.text()),
+            Event::Done(done) => {
+                eprintln!();
+                for line in done.lines() {
+                    eprintln!("{line}");
+                }
+            }
+            Event::Step(_) | Event::Progress(_) => {}
+        }
+    }
+
+    fn choose_device<'a>(&'a self, devices: &'a [DeviceInfo]) -> Ask<'a, Option<usize>> {
+        let udid = self.0.opt("--udid");
+        Box::pin(async move {
+            if let Some(u) = udid {
+                return match devices.iter().position(|d| d.udid == u) {
+                    Some(i) => Ok(Some(i)),
+                    None => bail!("no device {u} on USB: plug it in with its cable and unlock it"),
+                };
+            }
+            match devices.len() {
+                0 => bail!("no iPhone or iPad on USB: plug one in with its cable and unlock it"),
+                1 => Ok(Some(0)),
+                n => {
+                    eprintln!("{n} devices are plugged in:");
+                    for d in devices {
+                        eprintln!("  {} ({}, iOS {}): --udid {}", d.name, d.class, d.os, d.udid);
+                    }
+                    bail!("name the one to set up with --udid");
+                }
+            }
+        })
+    }
+
+    fn waits_for_developer_mode(&self) -> bool {
+        false
+    }
+
+    fn sign_in(&self) -> Ask<'_, SignIn> {
+        Box::pin(async move {
+            let apple_id = match self.0.opt("--apple-id") {
+                Some(id) => id.to_string(),
+                None => ask("Apple ID (email): ")?,
+            };
+            Ok(SignIn { apple_id, pair_again: self.0.flag("--pair-again") })
+        })
+    }
+
+    fn password<'a>(&'a self, apple_id: &'a str) -> Ask<'a, Zeroizing<String>> {
+        Box::pin(async move {
+            Ok(Zeroizing::new(
+                rpassword::prompt_password(format!("Apple ID password for {apple_id} (not shown as you type): "))
+                    .map_err(|_| report!("couldn't read the password: run this in a terminal"))?,
+            ))
+        })
+    }
+
+    fn two_factor(&self, params: TwoFactorCallbackParams) -> Ask<'_, TwoFactorCallbackResponse> {
+        Box::pin(async move {
+            if params.last_error.is_some() || params.unknown {
+                eprintln!("That didn't work. Try again, or pick another way to get a code.");
+            }
+            if !params.numbers.is_empty() {
+                eprintln!("Type \"sms <n>\" to get a text instead, \"devices\" for your Apple devices, \"resend\", or \"abort\":");
+                // Apple sends the numbers masked; they're shown only on this person's own screen.
+                for n in &params.numbers {
+                    eprintln!("  {}: {}", n.id, n.number_with_dial_code);
+                }
+            }
+            let line = ask(if params.sms { "Code from the text message: " } else { "Code shown on your Apple devices: " })?;
+            Ok(match line.as_str() {
+                "abort" | "" => TwoFactorCallbackResponse::Abort,
+                "devices" => TwoFactorCallbackResponse::SendToDevices,
+                "resend" => TwoFactorCallbackResponse::ResendCode,
+                s if s.starts_with("sms ") => TwoFactorCallbackResponse::SendSms(
+                    s[4..].trim().parse().map_err(|_| report!("not a number from the list"))?,
+                ),
+                s => TwoFactorCallbackResponse::SubmitCode(s.to_string()),
+            })
+        })
+    }
+
+    fn choose_team<'a>(&'a self, teams: &'a [DeveloperTeam]) -> Ask<'a, usize> {
+        Box::pin(async move {
+            eprintln!("This Apple ID has {} teams:", teams.len());
+            for (i, t) in teams.iter().enumerate() {
+                eprintln!("  {}: {} ({})", i + 1, t.name.as_deref().unwrap_or("?"), t.team_id);
+            }
+            let n: usize = ask("Which one should sign Slashplayed? ")?.parse().map_err(|_| report!("not a number from the list"))?;
+            if n == 0 || n > teams.len() {
+                bail!("not a number from the list");
+            }
+            Ok(n - 1)
+        })
+    }
+
+    fn confirm_revoke<'a>(&'a self, limit: &'a CertLimit) -> Ask<'a, ()> {
+        Box::pin(async move {
+            if self.0.flag("--revoke-oldest") {
+                return Ok(());
+            }
+            bail!(
+                "the team has all the development certificates Apple allows ({}), and this computer has no credential store to keep its signing key in, so it can't reuse a certificate. Nothing was revoked. Free a slot yourself, or run this again with --revoke-oldest to revoke the oldest certificate a Slashplayed tool made, on this or another computer (that computer's device then needs its own run before Slashplayed opens again)",
+                limit.certificates
+            )
+        })
+    }
 }
 
 #[cfg(test)]
@@ -264,6 +297,30 @@ mod tests {
         assert_eq!(a.opt("--apple-id"), Some("x@example.com"));
         assert!(a.flag("--pair-again"));
         assert_eq!(p(&["devices"]).unwrap().command, "devices");
+    }
+
+    fn phones() -> Vec<DeviceInfo> {
+        ["A", "B"].map(|u| DeviceInfo { udid: u.into(), name: u.into(), class: "iPhone".into(), os: "27.1".into() }).to_vec()
+    }
+
+    /// The flags that answer the window's questions on the command line.
+    #[tokio::test]
+    async fn flags_answer_the_questions() {
+        let a = p(&["--udid", "B", "--apple-id", "x@example.com", "--pair-again"]).unwrap();
+        let cli = Cli(&a);
+        assert_eq!(cli.choose_device(&phones()).await.unwrap(), Some(1));
+        let s = cli.sign_in().await.unwrap();
+        assert_eq!((s.apple_id.as_str(), s.pair_again), ("x@example.com", true));
+        let limit = CertLimit { certificates: "c".into(), oldest: "o".into() };
+        assert!(cli.confirm_revoke(&limit).await.is_err(), "no revoke without --revoke-oldest");
+
+        let a = p(&["--apple-id", "x@example.com", "--revoke-oldest"]).unwrap();
+        let cli = Cli(&a);
+        assert!(!cli.sign_in().await.unwrap().pair_again);
+        assert!(cli.confirm_revoke(&limit).await.is_ok());
+        assert!(cli.choose_device(&phones()).await.is_err(), "several devices and no --udid");
+        let a = p(&["--udid", "C"]).unwrap();
+        assert!(Cli(&a).choose_device(&phones()).await.is_err());
     }
 
     #[test]

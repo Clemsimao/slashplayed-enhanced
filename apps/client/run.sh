@@ -5,12 +5,15 @@
 # up), so nothing on the Mac debugs it. Prints the launcher's JIT lines as they come, and its message if
 # the helper couldn't do its part (the device shows the same).
 # Output: work/clienttest$SP_SUFFIX/console.txt, each line prefixed with seconds since run.sh started.
-# SP_FLAVOR (scripts/flavor.sh) picks which of the bundled clients the launcher runs; it's remembered in
+# SP_FLAVOR (scripts/flavor.sh) picks which game the launcher runs (its client in Library/spgames:
+# seed-client.sh, the companion's Play, or the device's own install, which a game with no client gets first,
+# its screen with no Back); it's remembered in
 # work/clienttest/last-flavor for the other scripts. Arguments are passed to the client; with none, the
 # flavor's Battle.net ones (SP_ARGS; grab-token.sh prints the ones Battle.net used).
 # SP_SCALE=1 or 2 sets the AppKit shim's backing scale, over the device's Settings > Display (a dev
 # override; unset, the setting decides: Automatic is 2 on an iPhone, 1 elsewhere). SP_INPUT_LOG_MAX sets
-# how many input events the AppKit shim logs (default 60, 0 for no cap; the lines include typed text).
+# how many input events the AppKit shim logs (default 60, 0 for no cap), and setting it at all logs every
+# key with what it types, which the default leaves out: use made-up text on such a run, never a password.
 # SP_PATCH_SERVICE replaces the patch check's service (sppatch.m) for tests: a base URL, or a path in the
 # app's home directory holding <product>/versions files (copy one in with devicectl; a <product>/cdns there
 # is optional). SP_PATCH_CELLULAR=1 has it treat the network as cellular (it asks before its download), and
@@ -22,8 +25,15 @@
 # preferred languages, which decide a game the device installs (launcher.m's sp_game_region_now).
 # SP_LOADING_DRILL=loading or a percent 0-100 keeps the loading screen up over the game (the AppKit shim's
 # sploading.m), showing "Loading…" or the data setup's progress at that percent, for screenshots.
+# SP_QUIT_DRILL=<seconds> has the client quit that long after its event loop starts, as Exit Game does (the AppKit
+# shim's spevent.m): the app should open again on the start screen (spjit.m's sp_relaunch).
 # SP_SCENE_CONNECT_LATE=1 holds the scene's connect until the client has set its layer (the AppKit shim's
 # spwindow.m), as a launch held until the headset is put on can do; the game must still come on screen.
+# SP_PROFILES_DRILL=1 has the launcher install every Documents/spprofiles/*.mobileprovision through the JIT
+# helper's misagent before it attaches (copy them in with devicectl), or list the app's profiles with none
+# there (launcher.m's profiles_drill). SP_RENEW=now has the launcher renew the app's profiles from Apple with the
+# device's Apple token (push-apple-token.sh) however long they have left, SP_RENEW=off never (spapple.m's
+# sp_profiles_renew; it otherwise renews in their last 3 days).
 # SP_SKIP_INTRO=1 starts the game without its intro movie or Retail's Screen Narrator question (launcher.m
 # skip_intro), for runs nobody watches. It sets them in the device's Config.wtf, so they stay skipped there.
 # SP_START=1 launches without naming a game, as the home screen does, so the start screen shows (spstart.m)
@@ -46,13 +56,8 @@ if [ "$SP_START" = 1 ]; then
   [ -n "$SP_START_DRILL" ] && export DEVICECTL_CHILD_SP_START_DRILL=$SP_START_DRILL
   [ -n "$SP_START_TEXT_SIZE" ] && export DEVICECTL_CHILD_SP_START_TEXT_SIZE=$SP_START_TEXT_SIZE
 else
-  # A build with images has to have this one; one without (build.sh's SP_NO_IMAGES=1) installs it on the
-  # device first if it hasn't yet (sppatch.m's sp_patch_install).
-  if ls $OUT/Slashplayed.app/wow-* >/dev/null 2>&1; then
-    [ -f $OUT/Slashplayed.app/wow-$SP_FLAVOR ] || { echo "$SP_FLAVOR isn't in the installed build (build.sh)"; exit 1; }
-  fi
   [ $# = 0 ] && set -- $SP_ARGS
-  echo $SP_FLAVOR > ../../work/clienttest/last-flavor
+  mkdir -p ../../work/clienttest && echo $SP_FLAVOR > ../../work/clienttest/last-flavor
   export DEVICECTL_CHILD_SP_LAUNCH_FLAVOR=$SP_FLAVOR
 fi
 [ -n "$SP_SCALE" ] && export DEVICECTL_CHILD_SP_SCALE=$SP_SCALE
@@ -64,8 +69,11 @@ fi
 [ -n "$SP_REGION_COUNTRY" ] && export DEVICECTL_CHILD_SP_REGION_COUNTRY=$SP_REGION_COUNTRY
 [ -n "$SP_REGION_LANGUAGES" ] && export DEVICECTL_CHILD_SP_REGION_LANGUAGES=$SP_REGION_LANGUAGES
 [ -n "$SP_LOADING_DRILL" ] && export DEVICECTL_CHILD_SP_LOADING_DRILL=$SP_LOADING_DRILL
+[ -n "$SP_PROFILES_DRILL" ] && export DEVICECTL_CHILD_SP_PROFILES_DRILL=$SP_PROFILES_DRILL
+[ -n "$SP_RENEW" ] && export DEVICECTL_CHILD_SP_RENEW=$SP_RENEW
 [ -n "$SP_SKIP_INTRO" ] && export DEVICECTL_CHILD_SP_SKIP_INTRO=$SP_SKIP_INTRO
 [ -n "$SP_SCENE_CONNECT_LATE" ] && export DEVICECTL_CHILD_SP_SCENE_CONNECT_LATE=$SP_SCENE_CONNECT_LATE
+[ -n "$SP_QUIT_DRILL" ] && export DEVICECTL_CHILD_SP_QUIT_DRILL=$SP_QUIT_DRILL
 if [ -n "$SP_START_DRILL" ]; then
   xcrun devicectl device process launch --device "$SP_DEVICE" --terminate-existing -- $BUNDLE_ID "$@"
   echo "start screen drill $SP_START_DRILL launched: screenshot with xcrun devicectl device capture screenshot --device $SP_DEVICE"
@@ -79,11 +87,11 @@ CONSOLE=$!
 # Follow the launch to the end of the prepare (ClientLauncher.swift reads the same lines): 180 s covers a
 # disk image mount, which the helper does when the device has none.
 for i in $(seq 900); do
-  grep -q -e '\[sp:System\] detached' -e "\[sp:launch\] can't prepare" $OUT/console.txt && break
+  grep -q -e '\[sp:launch\] guest: detached' -e "\[sp:launch\] can't prepare" $OUT/console.txt && break
   kill -0 $CONSOLE 2>/dev/null || break
   sleep 0.2
 done
-grep -E '\[sp:launch\] (jit:|vpn:|can.t prepare)|\[sp:System\] (preparing|detached)|ERROR' $OUT/console.txt || true
-grep -q '\[sp:System\] detached' $OUT/console.txt || { echo "the client wasn't prepared (log: $OUT/console.txt)"; kill $CONSOLE 2>/dev/null; exit 1; }
+grep -E '\[sp:launch\] (jit:|vpn:|can.t prepare|guest:)|ERROR' $OUT/console.txt || true
+grep -q '\[sp:launch\] guest: detached' $OUT/console.txt || { echo "the client wasn't prepared (log: $OUT/console.txt)"; kill $CONSOLE 2>/dev/null; exit 1; }
 wait $CONSOLE || true
 cat $OUT/console.txt

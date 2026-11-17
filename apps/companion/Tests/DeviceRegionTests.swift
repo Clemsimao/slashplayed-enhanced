@@ -10,6 +10,7 @@ final class DeviceRegionTests: XCTestCase {
     private let header = "Branch!STRING:0|Active!DEC:1|Build Key!HEX:16|CDN Key!HEX:16|Tags!STRING:0|Version!STRING:0|Product!STRING:0"
     private let stampHeader = "Product!STRING:0|Branch!STRING:0|Build Key!HEX:16|Version!STRING:0"
     private func table(_ header: String, _ rows: [String]) -> String { ([header] + rows).map { $0 + "\n" }.joined() }
+    /// A row Slashplayed 1.4 or 1.5 wrote for Europe's English, as enGB (issue #88): it reads as enUS.
     private let euTags = "OSX x86_64 EU? enGB speech?:OSX x86_64 EU? enGB text?"
 
     /// The owner's map: the Americas and Oceania are us; Europe, Russia, the Middle East, and Africa eu; Korea
@@ -31,14 +32,15 @@ final class DeviceRegionTests: XCTestCase {
     }
 
     /// The text language: the device's first preferred language the region has a locale for (and the build
-    /// ships), else the region's default. enGB ships with enUS, as Blizzard's manifests list no enGB.
+    /// ships), else the region's default. Europe's English is enUS: the clients have no enGB, and one set to it
+    /// exits on a region picker the device can't show (issue #88).
     func testLanguageFollowsTheDevice() {
-        XCTAssertEqual(sp_regions().map { sp_region_locales($0).first }, ["enUS", "enGB", "koKR", "zhTW"])
+        XCTAssertEqual(sp_regions().map { sp_region_locales($0).first }, ["enUS", "enUS", "koKR", "zhTW"])
         let cases: [(String, [String], String)] = [
-            ("eu", ["de-DE", "en-US"], "deDE"), ("eu", ["en-US"], "enGB"), ("us", ["en-GB"], "enUS"),
+            ("eu", ["de-DE", "en-US"], "deDE"), ("eu", ["en-GB"], "enUS"), ("us", ["en-GB"], "enUS"),
             ("us", ["es-ES"], "esMX"), ("eu", ["es-419"], "esES"), ("us", ["fr-CA", "pt-BR"], "ptBR"),
             ("us", ["fr-CA"], "enUS"), ("eu", ["ja-JP", "ru"], "ruRU"), ("kr", ["en-US"], "koKR"),
-            ("tw", ["zh-Hant-TW"], "zhTW"), ("tw", ["zh-Hans-CN"], "zhTW"), ("eu", [], "enGB"),
+            ("tw", ["zh-Hant-TW"], "zhTW"), ("tw", ["zh-Hans-CN"], "zhTW"), ("eu", [], "enUS"), ("eu", ["nl-NL"], "enUS"),
         ]
         for (region, preferred, locale) in cases {
             XCTAssertEqual(sp_region_locale(region, preferred, nil), locale, "\(region) \(preferred)")
@@ -46,10 +48,9 @@ final class DeviceRegionTests: XCTestCase {
         // What the build ships: Classic's manifests have no itIT, Retail's do.
         let classic = ["OSX", "deDE", "enUS", "esES", "esMX", "frFR", "koKR", "ptBR", "ruRU", "zhCN", "zhTW", "EU", "US"]
         XCTAssertEqual(sp_region_locale("eu", ["it-IT", "fr-FR"], classic), "frFR")
-        XCTAssertEqual(sp_region_locale("eu", ["it-IT"], classic), "enGB")
+        XCTAssertEqual(sp_region_locale("eu", ["it-IT"], classic), "enUS")
         XCTAssertEqual(sp_region_locale("eu", ["it-IT"], classic + ["itIT"]), "itIT")
-        XCTAssertTrue(sp_locale_shipped("enGB", classic))
-        XCTAssertFalse(sp_locale_shipped("enGB", ["deDE"]))
+        XCTAssertFalse(sp_locale_shipped("itIT", classic))
         XCTAssertTrue(sp_locale_shipped("itIT", nil))
     }
 
@@ -80,7 +81,7 @@ final class DeviceRegionTests: XCTestCase {
         let info = table(header, ["eu|1|aa|cc|\(euTags)|1.15.9.1|wow_classic_era"])
         var r = region(false, file: sp_region_file("wow_classic_era", ["Region": "kr", "Text": "koKR", "Speech": "koKR"]), info: info,
                        country: "US", preferred: ["en-US"])
-        XCTAssertEqual([r["Region"], r["Text"], r["Speech"], r["Source"]], ["eu", "enGB", "enGB", "mac"])
+        XCTAssertEqual([r["Region"], r["Text"], r["Speech"], r["Source"]], ["eu", "enUS", "enUS", "mac"])
         r = region(false, stamp: table(stampHeader, ["wow_classic_era|kr|aa|1.15.9.1"]))
         XCTAssertEqual([r["Region"], r["Text"], r["Source"]], ["kr", "koKR", "mac"])
         r = region(false)
@@ -96,15 +97,18 @@ final class DeviceRegionTests: XCTestCase {
         let info = table(header, ["eu|1|aa|cc|\(euTags)|1.15.9.1|wow_classic_era"])
         var r = region(true, file: file, kept: kept, stamp: stamp, info: info)
         XCTAssertEqual([r["Region"], r["Text"], r["Speech"], r["Source"], r["Shipped"]], ["tw", "zhTW", "zhTW", "chosen", "enUS zhTW"])
+        // A region file 1.4 or 1.5 wrote for Europe's English: enUS, so the game no longer exits at its start.
+        r = region(true, file: sp_region_file("wow_classic_era", ["Region": "eu", "Text": "enGB", "Speech": "enGB"]))
+        XCTAssertEqual([r["Region"], r["Text"], r["Speech"], r["Source"]], ["eu", "enUS", "enUS", "chosen"])
         r = region(true, kept: kept, stamp: stamp, info: info)
         XCTAssertEqual([r["Region"], r["Text"], r["Source"]], ["kr", "koKR", "kept row"])
         // The stamp's Branch, with the game data's languages when its row is in that region, else the device's.
         r = region(true, stamp: stamp, info: info, preferred: ["es-ES"])
         XCTAssertEqual([r["Region"], r["Text"], r["Source"]], ["us", "esMX", "stamp"])
         r = region(true, stamp: table(stampHeader, ["wow_classic_era|eu|aa|1.15.9.1"]), info: info, preferred: ["de-DE"])
-        XCTAssertEqual([r["Region"], r["Text"], r["Source"]], ["eu", "enGB", "stamp"])
+        XCTAssertEqual([r["Region"], r["Text"], r["Source"]], ["eu", "enUS", "stamp"])
         r = region(true, info: info)
-        XCTAssertEqual([r["Region"], r["Text"], r["Source"]], ["eu", "enGB", "build.info"])
+        XCTAssertEqual([r["Region"], r["Text"], r["Source"]], ["eu", "enUS", "build.info"])
         // Nothing yet (an empty container: the host tool's): the device's, German in Germany. No more "us".
         r = region(true)
         XCTAssertEqual([r["Region"], r["Text"], r["Speech"], r["Source"]], ["eu", "deDE", "deDE", "device"])
@@ -165,27 +169,50 @@ final class DeviceRegionTests: XCTestCase {
     func testConfigFollowsTheRegion() {
         let eu = ["Region": "eu", "Text": "deDE", "Speech": "deDE"]
         var set: NSArray?
-        var text = sp_config_with_region(nil, eu, true, &set)
+        var text = sp_config_with_region(nil, eu, &set)
         XCTAssertEqual(text, "SET portal \"eu\"\nSET textLocale \"deDE\"\nSET audioLocale \"deDE\"\n")
         XCTAssertEqual(set as? [String], ["portal", "textLocale", "audioLocale"])
         // Again: nothing to do.
-        XCTAssertEqual(sp_config_with_region(text, eu, true, &set), text)
+        XCTAssertEqual(sp_config_with_region(text, eu, &set), text)
         XCTAssertEqual(set?.count, 0)
         // The game saved them empty after a region picker it couldn't show: filled, the rest kept.
         let blank = "SET gxApi \"metal\"\nSET portal \"\"\nSET textLocale \"\"\nSET audioLocale \"enUS\"\n"
-        text = sp_config_with_region(blank, eu, false, &set)
+        text = sp_config_with_region(blank, eu, &set)
         XCTAssertEqual(text, "SET gxApi \"metal\"\nSET portal \"eu\"\nSET textLocale \"deDE\"\nSET audioLocale \"enUS\"\n")
         XCTAssertEqual(set as? [String], ["portal", "textLocale"])
         // A language picked in the game's options, same region: kept.
         let picked = "SET portal \"eu\"\nSET textLocale \"frFR\"\nSET audioLocale \"frFR\"\n"
-        XCTAssertEqual(sp_config_with_region(picked, eu, true, &set), picked)
+        XCTAssertEqual(sp_config_with_region(picked, eu, &set), picked)
         // Settings moved the game to Europe: all three follow.
         let us = "SET portal \"us\"\nSET textLocale \"enUS\"\nSET audioLocale \"enUS\"\nSET gxApi \"metal\"\n"
-        XCTAssertEqual(sp_config_with_region(us, eu, true, &set),
+        XCTAssertEqual(sp_config_with_region(us, eu, &set),
                        "SET portal \"eu\"\nSET textLocale \"deDE\"\nSET audioLocale \"deDE\"\nSET gxApi \"metal\"\n")
         XCTAssertEqual(set as? [String], ["portal", "textLocale", "audioLocale"])
-        // The Mac's game: its values stay, whatever the device thinks.
-        XCTAssertEqual(sp_config_with_region(us, eu, false, &set), us)
+        // Nothing said the region (a Mac game with no Branch in its row or stamp): what's set stays.
+        XCTAssertEqual(sp_config_with_region(us, ["Region": "us", "Text": "enUS", "Speech": "enUS", "Source": "default"], &set), us)
         XCTAssertEqual(set?.count, 0)
+    }
+
+    /// A game copied from a Mac in Europe (issue #94): the companion's first Config.wtf says the Mac's region and
+    /// languages, and one an older companion sent, "us" whatever the Mac's, is moved to the Mac's row at the next
+    /// start, so the client signs in to Europe's account server. The Mac's own row decides both.
+    func testMacGameConfigFollowsTheMacsRow() {
+        let frTags = "OSX x86_64 EU? acct-FRA? geoip-FR? frFR speech?:OSX x86_64 EU? acct-FRA? geoip-FR? frFR text?"
+        let info = table(header, ["eu|1|aa|cc|\(frTags)|1.60.1.70938|wowf"])
+        let choice = sp_game_region("wowf", false, nil, nil, nil, info, "US", ["en-US"])
+        let config = "SET portal \"eu\"\nSET textLocale \"frFR\"\nSET audioLocale \"frFR\"\n"
+        XCTAssertEqual(GameFiles.firstConfig(region: "eu", tags: frTags), config)
+        var set: NSArray?
+        XCTAssertEqual(sp_config_with_region(config, choice, &set), config)  // the launcher agrees with it
+        XCTAssertEqual(set?.count, 0)
+        let old = "SET gxApi \"metal\"\nSET portal \"us\"\nSET textLocale \"enUS\"\nSET audioLocale \"enUS\"\n"
+        XCTAssertEqual(sp_config_with_region(old, choice, &set), "SET gxApi \"metal\"\n" + config)
+        XCTAssertEqual(set as? [String], ["portal", "textLocale", "audioLocale"])
+        // Speech and text apart; Europe's English as enUS (issue #88); no locale in the Tags: the region's own.
+        let mixed = "OSX x86_64 EU? deDE speech?:OSX x86_64 EU? enGB text?"
+        XCTAssertEqual(GameFiles.firstConfig(region: "eu", tags: mixed),
+                       "SET portal \"eu\"\nSET textLocale \"enUS\"\nSET audioLocale \"deDE\"\n")
+        XCTAssertEqual(GameFiles.firstConfig(region: "kr", tags: "OSX x86_64 KR?"),
+                       "SET portal \"kr\"\nSET textLocale \"koKR\"\nSET audioLocale \"koKR\"\n")
     }
 }
