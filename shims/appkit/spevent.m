@@ -91,6 +91,9 @@ static NSUInteger sp_mouse_buttons;    // bit per button number, like +pressedMo
 static SPEvent *sp_current_event;
 static NSMutableArray *sp_local_monitors;  // [mask, handler] pairs
 static int sp_logged_events;
+static void sp_touchpad_poll(void);  // sptouchpad.m: touchpad swipes as F16-F19
+static void sp_clipboard_keep_paste(void);  // spclipboard.m: the edit menu's Paste, read with no prompt
+static void sp_keyboard_rotation(BOOL starting);  // spkeyboard.m: the iPhone's zoom comes off for a turn
 
 // UIKit points in the scene window <-> AppKit points in the client's window. A point in the strip beside
 // the game converts to one outside the window (x < 0 or past its width), as on a Mac.
@@ -113,17 +116,40 @@ static SPEvent *sp_event(NSUInteger type) {
     return e;
 }
 
-static void sp_post(SPEvent *e) {
+// Unlogged: the on-screen keyboard's presses (spkeyboard.m), which are what was typed.
+static void sp_post_quiet(SPEvent *e) {
     if (!sp_events) sp_events = [NSMutableArray array];
     [sp_events addObject:e];
+}
+
+static unichar sp_function_char(unsigned short mac);
+
+// Setting SP_INPUT_LOG_MAX at all (run.sh passes it through devicectl; a player's launch never has it)
+// opts a diagnosis run in to logging what's typed. Without it, nothing typed reaches the log.
+static BOOL sp_input_log_text(void) {
+    static int on = -1;
+    if (on < 0) on = getenv("SP_INPUT_LOG_MAX") != NULL;
+    return on;
+}
+
+static void sp_post(SPEvent *e) {
+    sp_post_quiet(e);
     // Only the first events are logged, so a session's log stays small; a diagnosis that happens later
     // in a session (a key that stops working after login) needs more: SP_INPUT_LOG_MAX raises the cap,
-    // 0 for none. The lines carry typed characters, chat included, so keep it to diagnosis runs.
+    // 0 for none. A hardware keyboard types the Battle.net password into the game's login form, so by
+    // default a key that types text (one with no AppKit function character: letters, digits, space,
+    // punctuation, the keypad's digits) isn't logged at all: its key code and Shift give the text away as
+    // surely as its characters, and its line, how much was typed. Modifiers, Return, Tab, Escape, Delete,
+    // arrows, and function keys still are, with their codes, and so are clicks.
     static int max = -1;
     if (max < 0) max = getenv("SP_INPUT_LOG_MAX") ? atoi(getenv("SP_INPUT_LOG_MAX")) : 60;
     if (max < 0) max = 60;
-    if ((max == 0 || sp_logged_events < max) && e->type != SPMouseMoved && e->type != SPLeftMouseDragged &&
-        e->type != SPRightMouseDragged && e->type != SPScrollWheel) {
+    if (e->type == SPMouseMoved || e->type == SPLeftMouseDragged || e->type == SPRightMouseDragged ||
+        e->type == SPScrollWheel)
+        return;
+    if ((e->type == SPKeyDown || e->type == SPKeyUp) && !sp_function_char(e->keyCode) && !sp_input_log_text())
+        return;
+    if (max == 0 || sp_logged_events < max) {
         sp_logged_events++;
         sp_stub_log([NSString stringWithFormat:@"input: %@", e].UTF8String);
     }
@@ -245,7 +271,9 @@ static NSMutableIndexSet *sp_hardware_keys, *sp_touch_keys;
 static void sp_key_input(unsigned usage, NSString *characters, NSString *ignoring, BOOL down, BOOL touch) {
     unsigned short mac = usage < 256 ? sp_hid_to_mac[usage] : 0;
     if (!mac && usage != 0x04) {  // 0x04 (a) is the one key whose code is 0
-        sp_stub_log([NSString stringWithFormat:@"input: unmapped HID usage 0x%x '%@'", usage, characters].UTF8String);
+        // The usage only: its characters are typed text, and are logged only on a run that opts in.
+        NSString *chars = sp_input_log_text() ? [NSString stringWithFormat:@" '%@'", characters] : @"";
+        sp_stub_log([NSString stringWithFormat:@"input: unmapped HID usage 0x%x%@", usage, chars].UTF8String);
         return;
     }
     if (!sp_hardware_keys) { sp_hardware_keys = [NSMutableIndexSet indexSet]; sp_touch_keys = [NSMutableIndexSet indexSet]; }
@@ -294,6 +322,35 @@ static void sp_key(UIKey *key, BOOL down) {
 
 static void sp_touch_key(unsigned usage, BOOL down) {
     sp_key_input(usage, usage == 0x2C ? @" " : @"", usage == 0x2C ? @" " : @"", down, YES);
+}
+
+// Command+<key> pressed as a hardware keyboard presses it, so the game's own shortcut runs (the touch edit
+// menu's Paste is its Cmd+V). The key and Command come up a moment later, as a real press's do, so the
+// game sees them held whether it reads the events' flags or +[NSEvent modifierFlags] while it handles
+// them. A Command already held (a hardware keyboard's) is left as it is.
+static void sp_post_command_key(unsigned short mac, NSString *chars) {
+    BOOL held = sp_mod_flags & SPCommand;
+    if (!held) {
+        sp_set_modifier(SPCommand, SPDevLCmd, YES);
+        SPEvent *e = sp_event(SPFlagsChanged);
+        e->keyCode = 0x37;
+        sp_post(e);
+    }
+    SPEvent *down = sp_event(SPKeyDown);
+    down->keyCode = mac;
+    down->characters = down->charactersIgnoringModifiers = chars;
+    sp_post(down);
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.1 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        SPEvent *up = sp_event(SPKeyUp);
+        up->keyCode = mac;
+        up->characters = up->charactersIgnoringModifiers = chars;
+        sp_post(up);
+        if (held) return;
+        sp_set_modifier(SPCommand, SPDevLCmd, NO);
+        SPEvent *flags = sp_event(SPFlagsChanged);
+        flags->keyCode = 0x37;
+        sp_post(flags);
+    });
 }
 
 static void sp_key_repeats(void) {
@@ -520,8 +577,15 @@ static int sp_cursor_hide_count;  // +hide minus +unhide; an +unhide while shown
 static BOOL sp_pointer_inside;    // a mouse or trackpad pointer is over the window
 static NSMutableArray *sp_cursor_rects;  // [view, rect, cursor], in the order added
 
+// A gamepad connected (GCController lists gamepads, not mice or keyboards): the look highlights are off
+// then, since a controller player doesn't pinch and the glow only distracts. SP_HOVER_CONTROLLER=1 keeps
+// them with a gamepad connected.
+static BOOL sp_gamepad_connected(void) {
+    return !getenv("SP_HOVER_CONTROLLER") && GCController.controllers.count > 0;
+}
+
 static void sp_cursor_update(void) {
-    sp_hover_layer.hidden = sp_pointer_inside;
+    sp_hover_layer.hidden = sp_pointer_inside || sp_gamepad_connected();
     if (!sp_cursor_view) return;
     BOOL show = sp_cursor_current && !sp_cursor_hide_count && sp_pointer_inside;
     sp_cursor_view.hidden = !show;
@@ -611,13 +675,28 @@ static void sp_pointer_lock_update(void) {
 - (UIRectEdge)preferredScreenEdgesDeferringSystemGestures {
     return UIRectEdgeAll;
 }
+- (void)viewWillTransitionToSize:(CGSize)size withTransitionCoordinator:(id<UIViewControllerTransitionCoordinator>)c {
+    sp_keyboard_rotation(YES);
+    [super viewWillTransitionToSize:size withTransitionCoordinator:c];
+    [c animateAlongsideTransition:nil completion:^(id<UIViewControllerTransitionCoordinatorContext> ctx) {
+        sp_keyboard_rotation(NO);
+    }];
+}
 #endif
 @end
 
 // ---- the UIKit side: the scene's root view collects input
 
-@interface SPInputView : UIView <UIPointerInteractionDelegate>
+@interface SPInputView : UIView <UIPointerInteractionDelegate, UIEditMenuInteractionDelegate>
 @end
+
+#if !TARGET_OS_VISION
+// spkeyboard.m: the on-screen keyboard, for the focused box or the edit menu's Keyboard.
+static void sp_keyboard_menu(CGPoint at);
+static void sp_keyboard_focus(BOOL known, CGRect box);  // sphover.m: from the SPKeyboard addon's strip
+static BOOL sp_keyboard_up(void);
+static void sp_keyboard_forget(void);
+#endif
 
 // An iPhone's mouse goes through AssistiveTouch, and there neither UIKit nor GCMouse has every button
 // right. A left click is a touch of its own, a finger's type, and those are right; GCMouse learns of
@@ -708,6 +787,25 @@ static BOOL sp_physical_pad(SPJoystick *joystick) {
     if (!physical && last) sp_stub_log("input: no physical controller, touch controls shown");
     return last = physical;
 }
+// ---- the touch edit menu (iPhone and iPad)
+//
+// With no hardware keyboard there's no Cmd+V or Cmd+C, so a gesture opens iOS's edit menu with Paste and
+// Copy. The game's view can't say when an edit box has focus (its selectedRange and
+// firstRectForCharacterRange: answer the same however its boxes are used, and it never asks for an input
+// context), so the gesture is the signal (and in game, for the keyboard, the SPKeyboard addon's strip:
+// spkeyboard.m). The menu's Paste is the system's, so its paste: reads the clipboard with no "Allow
+// Paste" prompt (spclipboard.m keeps the text), then presses Cmd+V for the game's own paste; Copy presses
+// Cmd+C, and the game writes the clipboard itself. Keyboard brings up the system keyboard, which types
+// into the game (spkeyboard.m); with a hardware keyboard connected, or the keyboard already up, it's left
+// out.
+//
+// The gesture is two fingers held still for half a second, the menu opening as they lift. It rides on the
+// chord rather than taking a finger count of its own, since each count already presses a button players
+// bind (a three-finger tap's middle click can be an autowalk toggle): the right button still goes down
+// at once and comes up at the lift, and a right press held that long without a move didn't interact
+// with an NPC under it (Anniversary, iPhone 16 Pro): only the menu came up.
+// The menu opens at the lift rather than during the hold, so a still moment in a two-finger mouselook
+// doesn't bring it up while the fingers are down, and any move past a tap's slop cancels it.
 #endif
 
 @implementation SPInputView {
@@ -725,6 +823,12 @@ static BOOL sp_physical_pad(SPJoystick *joystick) {
     SPJoystick *_joystick;
     NSArray<SPKeyboardButton *> *_keyboardButtons;
 #endif
+    UIEditMenuInteraction *_edit_menu;
+    UITouch *_press;                      // the first finger of the fingers down, for the edit menu's gesture
+    NSTimeInterval _press_at;             // when it landed
+    CGPoint _press_start;                 // where (UIKit)
+    NSUInteger _press_fingers;            // fingers that landed while it was down, it included
+    BOOL _press_moved;                    // it moved past a tap's slop
 }
 
 - (instancetype)initWithFrame:(CGRect)frame {
@@ -747,11 +851,25 @@ static BOOL sp_physical_pad(SPJoystick *joystick) {
     for (GCMouse *m in GCMouse.mice) sp_watch_mouse(m);
     [NSNotificationCenter.defaultCenter addObserverForName:GCMouseDidConnectNotification object:nil queue:nil
                                                 usingBlock:^(NSNotification *n) { sp_watch_mouse(n.object); }];
+    // visionOS turns a game controller's buttons into pinches at the gaze point, and the client's own gamepad
+    // input doesn't get them (the sticks and face buttons read zero in GameController): this interaction
+    // hands the controller's events to the Game Controller framework alone (GCEventInteraction.h).
+    // SP_GAMEPAD_SYSTEM=1 leaves the controller to the system.
+    if (!getenv("SP_GAMEPAD_SYSTEM")) {
+        GCEventInteraction *gc = [[GCEventInteraction alloc] init];
+        gc.handledEventTypes = GCUIEventTypeGamepad;
+        [self addInteraction:gc];
+    }
+    // The look highlights follow whether a gamepad is connected (sp_gamepad_connected).
+    for (NSNotificationName name in @[GCControllerDidConnectNotification, GCControllerDidDisconnectNotification])
+        [NSNotificationCenter.defaultCenter addObserverForName:name object:nil queue:NSOperationQueue.mainQueue
+                                                    usingBlock:^(NSNotification *n) { sp_cursor_update(); }];
     // Above the client's CAMetalLayer, which is added to this view's layer later.
     sp_hover_layer = [[SPHoverLayer alloc] initWithFrame:self.bounds];
     sp_hover_layer.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
     sp_hover_layer.layer.zPosition = 1000;
     [self addSubview:sp_hover_layer];
+    sp_hover_layer.hidden = sp_gamepad_connected();  // a gamepad already connected
     sp_hover_test_grid();
     sp_cursor_view = [[UIView alloc] init];
     sp_cursor_view.userInteractionEnabled = NO;
@@ -784,6 +902,10 @@ static BOOL sp_physical_pad(SPJoystick *joystick) {
     [notifications addObserver:self selector:@selector(sp_pad_changed:) name:GCControllerDidDisconnectNotification object:nil];
 #endif
     if (!getenv("SP_CURSOR_SYSTEM")) [self addInteraction:[[UIPointerInteraction alloc] initWithDelegate:self]];
+#if !TARGET_OS_VISION
+    _edit_menu = [[UIEditMenuInteraction alloc] initWithDelegate:self];
+    [self addInteraction:_edit_menu];
+#endif
     [NSNotificationCenter.defaultCenter addObserverForName:UIPointerLockStateDidChangeNotification object:nil queue:nil
                                                 usingBlock:^(NSNotification *n) {
         UIScene *scene = n.userInfo[UIPointerLockStateSceneUserInfoKey];
@@ -854,6 +976,85 @@ static BOOL sp_physical_pad(SPJoystick *joystick) {
 // behind the fingers. Nothing here can opt out of that; Settings > Touch says so.
 - (UIEditingInteractionConfiguration)editingInteractionConfiguration {
     return UIEditingInteractionConfigurationNone;
+}
+
+// p: UIKit, in this view.
+- (void)sp_show_edit_menu:(CGPoint)p {
+    static int logged;
+    if (logged++ < 20) sp_stub_log("input: edit menu shown");
+    if (!sp_keyboard_up()) [self becomeFirstResponder];  // the keyboard's view would close it
+    [_edit_menu presentEditMenuWithConfiguration:[UIEditMenuConfiguration configurationWithIdentifier:nil sourcePoint:p]];
+}
+
+// The system's own commands this view answers for (canPerformAction:): Copy, and Paste when the clipboard
+// holds text. Copy is always offered, since nothing says whether the game has a selection. Then Keyboard,
+// with the menu's point, where the iPhone's zoom centers when no box's focus is known.
+- (UIMenu *)editMenuInteraction:(UIEditMenuInteraction *)interaction
+           menuForConfiguration:(UIEditMenuConfiguration *)configuration
+               suggestedActions:(NSArray<UIMenuElement *> *)suggested {
+    if (sp_keyboard_up() || GCKeyboard.coalescedKeyboard) return [UIMenu menuWithChildren:suggested];
+    CGPoint at = configuration.sourcePoint;
+    UIAction *keyboard = [UIAction actionWithTitle:@"Keyboard" image:[UIImage systemImageNamed:@"keyboard"]
+                                        identifier:nil handler:^(UIAction *a) { sp_keyboard_menu(at); }];
+    return [UIMenu menuWithChildren:[suggested arrayByAddingObject:keyboard]];
+}
+
+- (BOOL)canPerformAction:(SEL)action withSender:(id)sender {
+    if (action == @selector(paste:)) return UIPasteboard.generalPasteboard.hasStrings;  // asks nothing
+    if (action == @selector(copy:)) return YES;
+    // Nothing else, and not asked of UIKit: with Speak Selection on, UIKit's answer for the menu's Speak
+    // runs Accessibility's QuickSpeak, which fetches the selection by calling copy: here, and that pressed
+    // Cmd+C as the menu opened (a "c" typed into the login screen's password box; iPhone 16 Pro, iOS 27.2).
+    return NO;
+}
+
+// A Command held is a hardware keyboard's Cmd+V or Cmd+C, should the system ever route one here: the game
+// has that press already, so Paste only keeps the text and Copy does nothing.
+- (void)paste:(id)sender {
+    sp_clipboard_keep_paste();
+    sp_keyboard_forget();  // the box gains text the keyboard's buffer doesn't hold
+    static int logged;
+    if (logged++ < 5) sp_stub_log(sp_mod_flags & SPCommand ? "input: paste: with Command held" : "input: paste: (Cmd+V)");
+    if (!(sp_mod_flags & SPCommand)) sp_post_command_key(0x09, @"v");
+}
+
+- (void)copy:(id)sender {
+    static int logged;
+    if (logged++ < 5) sp_stub_log("input: copy: (Cmd+C)");
+    if (!(sp_mod_flags & SPCommand)) sp_post_command_key(0x08, @"c");
+}
+
+// The edit menu's gesture: a finger that's the only touch starts it, fingers landing while it's down join
+// (a pointer's touch, a pencil, or an AssistiveTouch click ends it).
+// t: just added to _touches.
+- (void)sp_press_began:(UITouch *)t {
+    if (!sp_finger(t)) {
+        _press = nil;
+    } else if (_touches.count == 1) {
+        _press = t;
+        _press_at = t.timestamp;
+        _press_start = [t locationInView:self];
+        _press_fingers = 1;
+        _press_moved = NO;
+    } else if (_press) {
+        _press_fingers++;
+    }
+}
+
+- (void)sp_press_moved:(NSSet<UITouch *> *)touches {
+    if (!_press || ![touches containsObject:_press]) return;
+    CGPoint p = [_press locationInView:self];
+    if (hypot(p.x - _press_start.x, p.y - _press_start.y) > 10) _press_moved = YES;
+}
+
+// When the last finger lifts: two fingers, still, for 0.5 s or more.
+- (void)sp_press_ended:(NSSet<UITouch *> *)touches {
+    if (!_press || _touches.count) return;
+    NSTimeInterval held = touches.anyObject.timestamp - _press_at;
+    BOOL show = !_press_moved && _press_fingers == 2 && held >= 0.5;
+    CGPoint at = [_press locationInView:self];
+    _press = nil;
+    if (show) [self sp_show_edit_menu:at];
 }
 #endif
 
@@ -1005,6 +1206,8 @@ static BOOL sp_physical_pad(SPJoystick *joystick) {
             [_finger_button setObject:@(UIEventButtonMaskSecondary) forKey:t];
             continue;
         }
+        sp_keyboard_forget();  // the box typed in may have lost focus, or another have it
+        [self sp_press_began:t];
         // A chord starts with a finger that's the only touch, and takes fingers until it's resolved.
         if (sp_finger(t) && (_chord.count || _touches.count == 1)) {
             [_chord addObject:t];
@@ -1102,6 +1305,9 @@ static BOOL sp_physical_pad(SPJoystick *joystick) {
     for (SPKeyboardButton *button in _keyboardButtons) [button syncWithEvent:event];
 #endif
     if (!_touches.count || ![touches intersectsSet:[NSSet setWithArray:_touches]]) return;
+#if !TARGET_OS_VISION
+    [self sp_press_moved:touches];
+#endif
     if (_chord.count) return;  // the press, and the moves after it, wait for the chord (sp_chord_resolve)
     UITouch *mover = [self sp_mover:touches];
     CGPoint p = [touches containsObject:mover] ? [self sp_location:mover] : sp_pointer;
@@ -1120,6 +1326,9 @@ static BOOL sp_physical_pad(SPJoystick *joystick) {
     CGPoint p = _touches.count > touches.count ? sp_pointer : [self sp_location:[self sp_mover:touches]];
     [self sp_remove:touches];
     [self sp_buttons:[self sp_mask:event touches:touches] at:p];
+#if !TARGET_OS_VISION
+    [self sp_press_ended:touches];
+#endif
 }
 
 // When the last touch is cancelled, buttons it had down stay down while GCMouse says they're held (it
@@ -1127,6 +1336,9 @@ static BOOL sp_physical_pad(SPJoystick *joystick) {
 - (void)touchesCancelled:(NSSet<UITouch *> *)touches withEvent:(UIEvent *)event {
     CGPoint p = [self sp_location:[self sp_mover:touches]];
     [self sp_remove:touches];
+#if !TARGET_OS_VISION
+    _press = nil;
+#endif
     if (_touches.count) {
         [self sp_buttons:[self sp_mask:event touches:touches] at:sp_pointer];
         return;
@@ -1487,13 +1699,27 @@ static void sp_send_to_tracking_areas(id view, NSEvent *e, NSUInteger option, SE
 
 static char sp_app_delegate_key;
 
+// The quit drill ($SP_QUIT_DRILL=<seconds>, run.sh): terminate: from the client's own event pump, as its Exit
+// Game and Quit do, that many seconds after the pump's first call, so the way back to the start screen
+// (spuikit.m's sp_terminate_now, the launcher's sp_relaunch) is tested without a tap. Once.
+static void sp_quit_drill(NSApplication *app) {
+    static double at = -1;
+    if (at < 0) at = getenv("SP_QUIT_DRILL") ? CFAbsoluteTimeGetCurrent() + atof(getenv("SP_QUIT_DRILL")) : 0;
+    if (!at || CFAbsoluteTimeGetCurrent() < at) return;
+    at = 0;
+    sp_stub_log("quit drill: -[NSApplication terminate:]");
+    [app terminate:nil];
+}
+
 @implementation NSApplication (SPEvent)
 - (id)nextEventMatchingMask:(uint64_t)mask untilDate:(id)date inMode:(id)mode dequeue:(BOOL)dequeue {
     SP_LOG_ONCE("-[NSApplication nextEventMatchingMask:untilDate:inMode:dequeue:] (pumps UIKit)");
+    sp_quit_drill(self);
     // Pump UIKit only when nothing is queued, so a burst of input drains before more is collected.
     if (!sp_events.count) sp_uikit_pump(NO);
     sp_window_track_scene();
     sp_key_repeats();
+    sp_touchpad_poll();
     for (NSUInteger i = 0; i < sp_events.count; i++) {
         SPEvent *e = sp_events[i];
         if (!(mask & (1ull << e->type))) continue;

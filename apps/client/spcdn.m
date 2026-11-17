@@ -12,7 +12,9 @@
 // decoded MD5 is the content key the build config gives it. Unlike the companion's, nothing is cached but
 // the slice itself (the caller's `output`): the device fetches one build's once.
 #import "spcdn.h"
+#include "spguest.h"  // spguest_check_file
 #include <CommonCrypto/CommonDigest.h>
+#include <mach-o/loader.h>
 #include <stdatomic.h>
 #include <zlib.h>
 
@@ -833,8 +835,10 @@ NSDictionary<NSString *, NSString *> *sp_game_region(NSString *product, BOOL dev
     NSString *infoBranch = info[@"Branch"].lowercaseString, *stampBranch = stamped[@"Branch"].lowercaseString;
     if (!device) {
         // The Mac's: its .build.info row (the companion sends it again at every sync), else the image's stamp.
+        // With neither, nothing says the region: "default", which Config.wtf doesn't follow (sp_config_with_region).
         if (is_region(infoBranch)) return from(infoBranch, info[@"Tags"], @"mac");
-        return from(is_region(stampBranch) ? stampBranch : @"us", nil, @"mac");
+        if (is_region(stampBranch)) return from(stampBranch, nil, @"mac");
+        return from(@"us", nil, @"default");
     }
     NSDictionary<NSString *, NSString *> *chosen = sp_table_row(regionFile, @"Product", product);
     if ([sp_regions() containsObject:chosen[@"Region"]] && chosen[@"Text"].length) {
@@ -880,8 +884,7 @@ NSString *sp_table_with(NSString *text, NSString *product, NSDictionary<NSString
     return changed ? [lines componentsJoinedByString:@"\n"] : nil;
 }
 
-NSString *sp_config_with_region(NSString *config, NSDictionary<NSString *, NSString *> *choice, BOOL follow,
-                                NSArray<NSString *> **set) {
+NSString *sp_config_with_region(NSString *config, NSDictionary<NSString *, NSString *> *choice, NSArray<NSString *> **set) {
     NSString *text = config ?: @"";
     NSArray<NSArray<NSString *> *> *cvars = @[@[@"portal", choice[@"Region"]], @[@"textLocale", choice[@"Text"]],
                                               @[@"audioLocale", choice[@"Speech"]]];
@@ -893,10 +896,12 @@ NSString *sp_config_with_region(NSString *config, NSDictionary<NSString *, NSStr
         NSTextCheckingResult *last = [re matchesInString:text options:0 range:NSMakeRange(0, text.length)].lastObject;
         return last ? [text substringWithRange:[last rangeAtIndex:1]] : nil;
     };
-    // The device's region moved (Settings) since the game last ran: the portal and both languages go with
-    // it, since the old languages are the old region's. Otherwise a value set stays (a language picked in
-    // the game's own options, or the Mac's), and only a missing or empty one is filled.
+    // The region moved since the game last ran (Settings, or Battle.net on the Mac), or the portal never was the
+    // region (an older companion's first Config.wtf said "us" whatever the Mac's region, issue #94): the portal
+    // and both languages go with it, since the old languages are the old portal's. Otherwise a value set stays
+    // (a language picked in the game's own options), and only a missing or empty one is filled.
     NSString *portal = value(@"portal");
+    BOOL follow = ![choice[@"Source"] isEqual:@"default"];
     BOOL moved = follow && portal.length && ![portal.lowercaseString isEqual:choice[@"Region"]];
     NSMutableArray<NSString *> *names = [NSMutableArray array];
     for (NSArray<NSString *> *cvar in cvars) {
@@ -919,19 +924,49 @@ NSString *sp_config_with_region(NSString *config, NSDictionary<NSString *, NSStr
     return text;
 }
 
-// ---- installing a game on the device (launcher.m, sppatch.m)
+// ---- the game's client in Library/spgames (launcher.m, sppatch.m)
 
-NSArray<NSString *> *sp_games(NSArray<NSString *> *order, NSArray<NSString *> *bundled, NSArray<NSString *> *made,
-                              NSSet<NSString *> **installable) {
-    NSMutableSet<NSString *> *none = [NSMutableSet set];
-    NSArray<NSString *> *games = bundled;
-    if (!bundled.count) {
-        games = order;
-        for (NSString *f in order)
-            if (![made containsObject:f]) [none addObject:f];
+NSString *sp_slice_problem(NSString *path) {
+    char why[256];
+    return spguest_check_file(path.fileSystemRepresentation, why, sizeof why) ? nil : @(why);
+}
+
+NSString *sp_slice_retire(NSString *games, NSString *flavor, NSString *product) {
+    NSFileManager *fm = NSFileManager.defaultManager;
+    NSString *file = [games stringByAppendingPathComponent:[@"wow-" stringByAppendingString:flavor]];
+    // What 1.4 and earlier left when a crash or a full disk stopped its signing part way (spsign.m's sp_sign
+    // wrote <dest>.signing, then <dest>.signed, beside the image; an Update signed into wow-<flavor>.signing
+    // first, so its own were .signing.signing and .signing.signed): nothing reads them, and each is a client's size.
+    NSMutableArray<NSString *> *leftovers = [NSMutableArray array];
+    for (NSString *suffix in @[@".signing", @".signed", @".signing.signing", @".signing.signed"]) {
+        NSString *path = [file stringByAppendingString:suffix];
+        unsigned long long size = [fm attributesOfItemAtPath:path error:nil].fileSize;
+        if ([fm removeItemAtPath:path error:nil])
+            [leftovers addObject:[NSString stringWithFormat:@"%@ (%.1f MB)", path.lastPathComponent, size / 1e6]];
     }
+    NSString *left = leftovers.count ? [NSString stringWithFormat:@"deleted what an older Slashplayed's signing left in Library/spgames: %@",
+                                                                  [leftovers componentsJoinedByString:@", "]] : nil;
+    if (![fm fileExistsAtPath:file]) return left;
+    NSString *why = sp_slice_problem(file);
+    if (!why) return left;
+    NSString *stamp = [games stringByAppendingPathComponent:[@"spbuild-" stringByAppendingString:flavor]];
+    NSString *version = sp_table_row([NSString stringWithContentsOfFile:stamp encoding:NSUTF8StringEncoding error:nil], @"Product",
+                                     product)[@"Version"];
+    unsigned long long size = [fm attributesOfItemAtPath:file error:nil].fileSize;
+    [fm removeItemAtPath:stamp error:nil];
+    [fm removeItemAtPath:file error:nil];
+    for (NSString *name in @[@"spbuildinfo-", @"spsource-"])
+        [fm removeItemAtPath:[games stringByAppendingPathComponent:[name stringByAppendingString:flavor]] error:nil];
+    return [NSString stringWithFormat:@"retired Library/spgames/wow-%@ (%@ %@, %.1f MB): %@; the game data stays%@", flavor, product,
+                                      version ?: @"with no stamp", size / 1e6, why, left ? [@"; " stringByAppendingString:left] : @""];
+}
+
+NSArray<NSString *> *sp_games(NSArray<NSString *> *order, NSArray<NSString *> *made, NSSet<NSString *> **installable) {
+    NSMutableSet<NSString *> *none = [NSMutableSet set];
+    for (NSString *f in order)
+        if (![made containsObject:f]) [none addObject:f];
     *installable = none;
-    return [games sortedArrayUsingComparator:^NSComparisonResult(NSString *a, NSString *b) {
+    return [order sortedArrayUsingComparator:^NSComparisonResult(NSString *a, NSString *b) {
         NSUInteger ia = [order indexOfObject:a], ib = [order indexOfObject:b];
         return ia < ib ? NSOrderedAscending : ia > ib ? NSOrderedDescending : [a compare:b];
     }];
@@ -945,8 +980,7 @@ BOOL sp_addons_place(NSString *addons, NSString *game, NSString *flavor, BOOL ho
     NSFileManager *fm = NSFileManager.defaultManager;
     NSMutableArray<NSString *> *written = [NSMutableArray array], *failed = [NSMutableArray array];
     NSUInteger same = 0;
-    NSMutableArray<NSString *> *names = [NSMutableArray arrayWithObject:@"SPMovie"];
-    if (hover) [names addObject:@"SPHover"];
+    NSMutableArray<NSString *> *names = [(hover ? @[@"SPMovie", @"SPHover"] : @[@"SPMovie", @"SPKeyboard"]) mutableCopy];
     // Touch bars use Forever's API and TOC, so carrying them in the app doesn't install them into other games.
     if ([flavor isEqualToString:@"forever"]) [names addObject:@"SPTouchBars"];
     for (NSString *name in names)

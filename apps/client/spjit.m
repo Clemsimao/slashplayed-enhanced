@@ -167,17 +167,15 @@ static NSDictionary *read_ddi(NSString *library) {
 
 static NSString *summary(NSDictionary *reply) { return reply[@"summary"] ?: @"no summary"; }
 
-// Gets the helper attached to this process. Returns nil once it is (or when a debugger already is: one
-// that launched the app, such as StikDebug, services the prepare itself), else what went wrong, for the
-// person: the launcher shows it on the scene and doesn't load the client. `pump` runs the main thread
-// for a while: UIKit, when it's up, and the main queue.
-NSString *sp_jit_attach(void (^pump)(double)) {
-    double t0 = now();
+// LocalDevVPN's end of the loopback: the device's RemotePairing service, as the helper reaches it.
+#define ENDPOINTS (@[@"10.7.0.1:49152"])
+
+// The helper's session: the pairing record (on the headset made here when there's none), LocalDevVPN, and a
+// status request through the tunnel, which says whether the device accepts the record and whether the disk
+// image is mounted. Nil once the status came back ok (`*pairing` and `*status` set), else what went wrong,
+// for the person. `*pump` may be swapped for UIKit's (the headset's pairing screen).
+static NSString *session(void (^*pump)(double), NSData **pairing_out, NSDictionary **status_out) {
     NSString *noun = sp_device_noun();
-    if (sp_traced()) {
-        say(@"a debugger is already attached; it services the prepare");
-        return nil;
-    }
     NSString *library = [NSHomeDirectory() stringByAppendingPathComponent:@"Library"];
     NSString *record = [library stringByAppendingPathComponent:@"sppairing.plist"];
     NSData *pairing = [NSData dataWithContentsOfFile:record];
@@ -187,7 +185,6 @@ NSString *sp_jit_attach(void (^pump)(double)) {
         [NSFileManager.defaultManager removeItemAtPath:record error:nil];
         pairing = nil;
     }
-    NSArray *endpoints = @[@"10.7.0.1:49152"];
     NSDictionary *status = nil;
     NSString *problem = nil;
     // A rejected record is deleted, and on the headset made again, once.
@@ -198,21 +195,29 @@ NSString *sp_jit_attach(void (^pump)(double)) {
             // LocalDevVPN first (spvpn.m): without it pair-setup could still reach the service by the
             // headset's own address, but the record's tunnel never comes up, and each try would leave the
             // person another paired host under Remote Devices.
-            if ((problem = sp_vpn_wait(&pump, noun))) return problem;
+            if ((problem = sp_vpn_wait(pump, noun))) return problem;
             // The pairing screen waits on the person: UIKit has to be up for the launch watchdog.
             void (^ui)(double) = sp_launch_uikit();
             if (!ui) return @"Slashplayed needs to pair with this Vision Pro, but couldn't show its window.";
-            pump = ui;
-            pairing = sp_pair_headset(record, pump, &problem);
+            *pump = ui;
+            pairing = sp_pair_headset(record, *pump, &problem);
             if (!pairing) return problem;
 #else
             return [NSString stringWithFormat:@"Slashplayed isn't paired with this %@ yet.\n\nOpen Slashplayed Companion on "
                     @"your Mac and play once with this %@ connected by USB: it pairs it.", noun, noun];
 #endif
         }
-        if ((problem = sp_vpn_wait(&pump, noun))) return problem;
+        if ((problem = sp_vpn_wait(pump, noun))) return problem;
         say([NSString stringWithFormat:@"pairing record: %lu bytes", (unsigned long)pairing.length]);
-        status = sp_jit_request(@{@"op": @"status", @"pairing": pairing, @"endpoints": endpoints}, 30, pump);
+        // Once more when a started helper never answered: right after a renewal installed the helper's own new
+        // profile, one start in about seven did that (iPhone, iOS 27), and the next start answered at once. The
+        // two share the one 30 s a dead helper always took to fail: 20 s, then 10 s, far past a healthy reply
+        // (about 0.2 s with the tunnel, iPhone).
+        status = sp_jit_request(@{@"op": @"status", @"pairing": pairing, @"endpoints": ENDPOINTS}, 20, *pump);
+        if (!status) {
+            say(@"the helper didn't answer the status request: starting it again");
+            status = sp_jit_request(@{@"op": @"status", @"pairing": pairing, @"endpoints": ENDPOINTS}, 10, *pump);
+        }
         if (!status) {
             return @"Slashplayed's helper didn't start.\n\nInstall Slashplayed again from Slashplayed Companion on your Mac.";
         }
@@ -234,10 +239,104 @@ NSString *sp_jit_attach(void (^pump)(double)) {
         [NSFileManager.defaultManager removeItemAtPath:record error:nil];
         pairing = nil;
 #if !TARGET_OS_VISION
-        return [NSString stringWithFormat:@"This %@ no longer accepts Slashplayed's pairing.\n\nOpen Slashplayed Companion "
-                @"on your Mac and play once with this %@ connected by USB: it pairs it again.", noun, noun];
+        // Set up from a Mac or from Windows or Linux: either companion sends a new record once this one's gone.
+        return [NSString stringWithFormat:@"This %@ no longer accepts Slashplayed's pairing.\n\nConnect this %@ by USB "
+                @"to the computer that set it up: on a Mac, open Slashplayed Companion and play once; on Windows or "
+                @"Linux, run the Slashplayed Companion again. Either pairs it again.", noun, noun];
 #endif
     }
+    *pairing_out = pairing;
+    *status_out = status;
+    return nil;
+}
+
+// A provisioning profile's plist (the file as installed: inside a CMS envelope, whose signature isn't
+// checked), nil when it can't be read.
+NSDictionary *sp_profile_plist(NSData *profile) {
+    if (!profile) return nil;
+    NSRange start = [profile rangeOfData:[@"<?xml" dataUsingEncoding:NSUTF8StringEncoding] options:0 range:NSMakeRange(0, profile.length)];
+    if (start.location == NSNotFound) return nil;
+    NSRange end = [profile rangeOfData:[@"</plist>" dataUsingEncoding:NSUTF8StringEncoding] options:0
+                                 range:NSMakeRange(start.location, profile.length - start.location)];
+    if (end.location == NSNotFound) return nil;
+    NSDictionary *plist = [NSPropertyListSerialization
+        propertyListWithData:[profile subdataWithRange:NSMakeRange(start.location, NSMaxRange(end) - start.location)]
+                     options:NSPropertyListImmutable format:NULL error:nil];
+    return [plist isKindOfClass:NSDictionary.class] ? plist : nil;
+}
+
+// A profile's application-identifier entitlement (<team>.<bundle ID>), nil when it has none.
+NSString *sp_profile_app_id(NSData *profile) {
+    NSDictionary *entitlements = sp_profile_plist(profile)[@"Entitlements"];
+    NSString *appid = [entitlements isKindOfClass:NSDictionary.class] ? entitlements[@"application-identifier"] : nil;
+    return [appid isKindOfClass:NSString.class] ? appid : nil;
+}
+
+// This app's App ID, from its embedded.mobileprovision (expired or not: which app it's for doesn't change).
+NSString *sp_app_id(void) {
+    return sp_profile_app_id([NSData dataWithContentsOfFile:[NSBundle.mainBundle.bundlePath
+                                                                stringByAppendingPathComponent:@"embedded.mobileprovision"]]);
+}
+
+// Installs `install` (provisioning profile files, maybe none) through the helper's misagent, then returns the
+// device's profiles for this app and its helper, as the helper lists them ("uuid", "appid", "expires"), the
+// latest-expiring first. Nil when the helper couldn't (`*problem` says why, for the person). How the app keeps
+// itself signed with no host: iOS opens an app on any valid installed profile for its App ID, not only the
+// one it embeds (research/isideload, "Profile-only refresh").
+// Only this app's own profiles are installed: one for another App ID is refused here, before the helper.
+NSArray<NSDictionary *> *sp_jit_profiles(NSArray<NSData *> *install, void (^pump)(double), NSString **problem) {
+    NSString *app = sp_app_id(), *helper = [app stringByAppendingString:@".helper"];
+    if (!app) { *problem = @"Slashplayed couldn't read its own App ID from its signature."; return nil; }
+    for (NSData *profile in install) {
+        NSString *appid = sp_profile_app_id(profile);
+        if (![appid isEqual:app] && ![appid isEqual:helper]) {
+            say([NSString stringWithFormat:@"profiles: refusing one for %@", appid ?: @"no App ID"]);
+            *problem = @"Slashplayed was handed a provisioning profile that isn't its own.";
+            return nil;
+        }
+    }
+    NSData *pairing = nil;
+    NSDictionary *status = nil;
+    if ((*problem = session(&pump, &pairing, &status))) return nil;
+    NSDictionary *reply = sp_jit_request(@{@"op": @"profiles", @"pairing": pairing, @"endpoints": ENDPOINTS,
+                                           @"install": install ?: @[]}, 60, pump);
+    if (reply) say([@"profiles: " stringByAppendingString:summary(reply)]);
+    if (![reply[@"ok"] boolValue]) {
+        *problem = [NSString stringWithFormat:@"Slashplayed's helper couldn't install its renewed provisioning profiles.\n\n(%@)",
+                    reply ? summary(reply) : @"no reply from the helper"];
+        return nil;
+    }
+    NSMutableArray *mine = [NSMutableArray array];
+    for (NSDictionary *p in reply[@"profiles"]) {
+        if ([p[@"appid"] isEqual:app] || [p[@"appid"] isEqual:helper]) [mine addObject:p];
+    }
+    [mine sortUsingComparator:^NSComparisonResult(NSDictionary *a, NSDictionary *b) {
+        return [b[@"expires"] compare:a[@"expires"]];
+    }];
+    for (NSDictionary *p in mine) {
+        say([NSString stringWithFormat:@"profiles: %@ %@ until %@", p[@"uuid"],
+             [p[@"appid"] isEqual:app] ? @"app" : @"helper", p[@"expires"]]);
+    }
+    return mine;
+}
+
+// Gets the helper attached to this process. Returns nil once it is (or when a debugger already is: one
+// that launched the app, such as StikDebug, services the prepare itself), else what went wrong, for the
+// person: the launcher shows it on the scene and doesn't load the client. `pump` runs the main thread
+// for a while: UIKit, when it's up, and the main queue.
+NSString *sp_jit_attach(void (^pump)(double)) {
+    double t0 = now();
+    NSString *noun = sp_device_noun();
+    if (sp_traced()) {
+        say(@"a debugger is already attached; it services the prepare");
+        return nil;
+    }
+    NSString *library = [NSHomeDirectory() stringByAppendingPathComponent:@"Library"];
+    NSArray *endpoints = ENDPOINTS;
+    NSData *pairing = nil;
+    NSDictionary *status = nil;
+    NSString *problem = session(&pump, &pairing, &status);
+    if (problem) return problem;
     if (![status[@"mounted"] boolValue]) {
         NSDictionary *ddi = read_ddi(library);
         if (!ddi) {
@@ -283,4 +382,44 @@ NSString *sp_jit_attach(void (^pump)(double)) {
     }
     return [NSString stringWithFormat:@"Slashplayed's helper couldn't attach to the game.\n\n(%@)",
             early ? summary(early) : @"it didn't attach within 30 s"];
+}
+
+void sp_login_clear(NSArray<NSString *> *flavors);  // splogin.m
+
+// Back to the start screen when a game quits (launcher.m's exit handler, after the client's own): the game
+// can't be unloaded from this process (its threads, Metal, and classes stay), so the helper launches this app
+// again with no game named once this process has exited (its "relaunch"; helper/Device.swift says why it waits
+// for the exit rather than killing). A login.txt still there is deleted first (the libSystem shim's delete has
+// run by now unless the exit didn't go through it). The helper's reply isn't waited for, since it comes after
+// this process is gone: only an early one, a failure such as no tunnel with LocalDevVPN off, is logged. Then the
+// exit goes on; when the relaunch can't happen, the next open from the home screen shows the start screen. The
+// wait doesn't run the main thread; the helper's reply comes on the extension's own queue.
+void sp_relaunch(void) {
+    double t = now();
+    NSString *flavor = NSProcessInfo.processInfo.environment[@"SP_SYSTEM_FLAVOR"];
+    if (flavor.length > 2) sp_login_clear(@[[flavor substringWithRange:NSMakeRange(1, flavor.length - 2)]]);
+    NSString *record = [NSHomeDirectory() stringByAppendingPathComponent:@"Library/sppairing.plist"];
+    NSData *pairing = [NSData dataWithContentsOfFile:record];
+    NSString *bundle = NSBundle.mainBundle.bundleIdentifier;
+    if (!pairing.length || !bundle) { say(@"relaunch: no pairing record; exiting"); return; }
+    NSObject *lock = [NSObject new];
+    __block NSDictionary *reply = nil;
+    __block BOOL replied = NO;
+    begin(@{@"op": @"relaunch", @"bundle": bundle, @"pid": @(getpid()), @"pairing": pairing, @"endpoints": ENDPOINTS},
+          ^(NSDictionary *r) {
+        @synchronized (lock) {
+            reply = r;
+            replied = YES;
+        }
+    });
+    // Long enough for the helper to start (about 0.15 s) and for a tunnel that won't come up to say so.
+    for (double end = now() + 1.5; now() < end; usleep(10000)) {
+        @synchronized (lock) {
+            if (replied) break;
+        }
+    }
+    @synchronized (lock) {
+        say([NSString stringWithFormat:@"relaunch: %@ after %.2f s; exiting", replied ? (reply ? summary(reply) : @"no reply")
+                                                                                 : @"handed to the helper", now() - t]);
+    }
 }

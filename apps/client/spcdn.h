@@ -50,7 +50,8 @@ BOOL sp_version_newer(NSString *_Nullable a, NSString *_Nullable b);
 // Whether the bundled image's build (its stamp's row, `bundled`) equals or passes an update the device made
 // (`update`, its Library/spgames stamp's row): the same Build Key or Version, or a later Version. The launcher
 // then deletes the update (launcher.m's retire_caught_up), since the companion has installed that build or a
-// later one; ClientBuild.deviceUpdate is the companion's side of the same rule. NO when either is missing.
+// later one; ClientBuild.clientCopy is the companion's side of the same rule (a client it copies over is one
+// this calls caught up with the Mac's). NO when either is missing.
 BOOL sp_update_caught_up(NSDictionary<NSString *, NSString *> *_Nullable bundled,
                          NSDictionary<NSString *, NSString *> *_Nullable update);
 
@@ -148,22 +149,35 @@ NSString *_Nullable sp_table_with(NSString *_Nullable text, NSString *product, N
 // Config.wtf with the game's region and languages (`choice`: sp_game_region) as portal, textLocale, and
 // audioLocale. Started by Battle.net the client takes them from its launch options, which nothing writes on
 // the device, and with neither it opens a region picker the device can't show and exits. A missing or empty
-// one is always set. With `follow` (the device decides the region) and a portal that isn't the region, the
-// region was changed in Settings: all three are replaced. Otherwise a value set stays (a language picked in
-// the game's options, or the Mac's). *set: the names set (empty for none).
-NSString *sp_config_with_region(NSString *_Nullable config, NSDictionary<NSString *, NSString *> *choice, BOOL follow,
+// one is always set. With a portal that isn't the region, the region moved (Settings, or Battle.net on the
+// Mac), or the portal was never the region (the first Config.wtf an older companion sent said "us" whatever the
+// Mac's region, issue #94): all three are replaced, unless nothing said the region (its Source "default", a Mac
+// game whose row and stamp have none). Otherwise a value set stays (a language picked in the game's options).
+// *set: the names set (empty for none).
+NSString *sp_config_with_region(NSString *_Nullable config, NSDictionary<NSString *, NSString *> *choice,
                                 NSArray<NSString *> *_Nullable *_Nonnull set);
 
-// ---- Installing a game on the device, with no image in the app (launcher.m, sppatch.m)
+// ---- The game's client in Library/spgames (launcher.m, sppatch.m)
 
-// The games the start screen offers, in flavors.plist's order (`order`, its ids; any other last, by name).
-// An app with client images offers the games it bundles one of (`bundled`), as it always has, and
-// *installable is empty: an update the device made of a game the app no longer bundles doesn't bring it back.
-// An app with none (built without them, so it ships no Blizzard bytes: build.sh's SP_NO_IMAGES=1) offers
-// every game in `order`, and *installable is the ones the device hasn't made an image of yet (`made`,
-// Library/spgames), which it installs itself (sp_patch_install).
-NSArray<NSString *> *sp_games(NSArray<NSString *> *order, NSArray<NSString *> *bundled, NSArray<NSString *> *made,
-                              NSSet<NSString *> *_Nullable *_Nonnull installable);
+// Why the file at `path` isn't a client spguest can load, or nil when it is: spguest's own parse of the
+// header and load commands (spguest_check_file), so nothing passes here that the load refuses, a build with
+// chained fixups included. An image an older Slashplayed made on the device (an MH_BUNDLE, assembled and
+// signed there), an arm64e file, or one a copy left short each has a reason, in a few words for the log
+// and the screen.
+NSString *_Nullable sp_slice_problem(NSString *path);
+
+// The game's client in `games` (Library/spgames: wow-<flavor>) retired when it isn't a slice spguest can
+// load (sp_slice_problem): its stamp first (spbuild-<flavor>, so a file left behind is never taken for its
+// build), then the file, its kept .build.info row (spbuildinfo-<flavor>), and spsource-<flavor>. The game
+// data stays. Whatever the client, the copies 1.4 and earlier left beside it when their signing stopped part
+// way (wow-<flavor>.signing, .signed) go too. A line for the log (versions, sizes, and the reason), or nil when
+// there was nothing to retire.
+NSString *_Nullable sp_slice_retire(NSString *games, NSString *flavor, NSString *product);
+
+// The games the start screen offers: every game flavors.plist lists (`order`, its ids; any other last, by
+// name), in its order. *installable is the ones the device has nothing of (`made`: those with a client in
+// Library/spgames, or game data to get one for), which it installs itself (sp_patch_install).
+NSArray<NSString *> *sp_games(NSArray<NSString *> *order, NSArray<NSString *> *made, NSSet<NSString *> *_Nullable *_Nonnull installable);
 
 // The game's .flavor.info, as Battle.net writes it in the game's folder and the companion sends it
 // (GameFiles.flavorInfo): its product, as a one-column table.
@@ -172,10 +186,11 @@ NSString *sp_flavor_info(NSString *product);
 // The addons the app carries (`addons`: the app's addons/, each <name>/<name>.toc and .lua as addon/ has
 // them; apps/client/build.sh and the companion's ClientAssembly put them there) into a game's folder
 // (`game`: Documents/_<flavor>_), at Interface/AddOns/<name>/, as the companion used to copy them: SPMovie
-// on every device, SPHover with `hover` (the headset: the iPad and iPhone have a real pointer), and SPTouchBars
-// only when `flavor` is "forever". Each file is written when the game's copy is missing or its bytes differ,
-// and left alone otherwise. SPMovie and SPHover list every flavor's Interface number; SPTouchBars lists
-// Forever's only. Saved variables in WTF are never touched. A line for the log; NO when one couldn't be
+// on every device, SPHover with `hover` (the headset: the iPad and iPhone have a real pointer), and
+// SPKeyboard without it (the iPad and iPhone: the focused text box, for the on-screen keyboard). Each file is
+// written when the game's copy is missing or its bytes differ, and left alone otherwise. Each TOC lists every
+// flavor's Interface number, so one copy suits each game; SPTouchBars, Forever's only, goes only into Forever.
+// A line for the log; NO when one couldn't be
 // read or written (*line says which).
 BOOL sp_addons_place(NSString *addons, NSString *game, NSString *flavor, BOOL hover, NSString *_Nullable *_Nonnull line);
 

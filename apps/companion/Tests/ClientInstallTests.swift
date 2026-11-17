@@ -1,29 +1,26 @@
 import XCTest
 
 /// Whether Play, Update Client, and Copy Game Files install the device app (ClientBuild.installNeed): from
-/// this Mac's record of what it installed on the device, the games ticked for it, and the app devicectl
-/// lists there; and the plain message for a copy into a data container that isn't there (Device.AppMissing).
+/// this Mac's record of what it installed on the device and the app devicectl lists there, never the games
+/// ticked for it (the app holds none); and the plain message for a copy into a data container that isn't there (Device.AppMissing).
 /// rc6's run on a second Mac found the iPhone with the first Mac's app (only Classic Era) called "the latest
 /// client", and then, with the app deleted, the same, then devicectl's container error.
 final class ClientInstallTests: XCTestCase {
-    private let games: [Flavor] = [.classicEra, .anniversary]
     private let here = "file:///private/var/containers/Bundle/Application/AAAA/Slashplayed.app/"
     private let there = "file:///private/var/containers/Bundle/Application/BBBB/Slashplayed.app/"
 
-    private func record(build: String = "b1", flavors: [Flavor]? = nil, url: String? = nil) -> ClientBuild.Installed {
-        ClientBuild.Installed(build: build, flavors: (flavors ?? games).map(\.rawValue), url: url ?? here)
+    private func record(build: String = "b1", url: String? = nil) -> ClientBuild.Installed {
+        ClientBuild.Installed(build: build, url: url ?? here)
     }
 
     private func need(build: String? = "b1", record: ClientBuild.Installed?, app: Device.AppState) -> ClientBuild.InstallNeed {
-        ClientBuild.installNeed(build: build, games: games, record: record, app: app)
+        ClientBuild.installNeed(build: build, record: record, app: app)
     }
 
     /// The install this Mac made, still there: nothing to do, also when the device couldn't be asked.
     func testTheSameInstallIsUpToDate() {
         XCTAssertEqual(need(record: record(), app: .present(url: here)), .upToDate)
         XCTAssertEqual(need(record: record(), app: .unknown), .upToDate)
-        // The games in another order are the same games.
-        XCTAssertEqual(need(record: record(flavors: games.reversed()), app: .present(url: here)), .upToDate)
         // No URL was listed right after the install: the record alone decides.
         XCTAssertEqual(need(record: record(url: ""), app: .present(url: there)), .upToDate)
     }
@@ -50,7 +47,7 @@ final class ClientInstallTests: XCTestCase {
     /// wasn't there). A record from before the bundle ID was kept still counts.
     func testARecordOfAnotherBundleIDIsNoRecord() {
         func need(_ record: ClientBuild.Installed, _ app: Device.AppState) -> ClientBuild.InstallNeed {
-            ClientBuild.installNeed(build: "b1", games: games, record: record, bundleID: "FREE.slashplayed", app: app)
+            ClientBuild.installNeed(build: "b1", record: record, bundleID: "FREE.slashplayed", app: app)
         }
         var paid = record()
         paid.bundleID = "PAID.slashplayed"
@@ -63,11 +60,27 @@ final class ClientInstallTests: XCTestCase {
     }
 
     /// The iPad and the iPhone share the build: one's install doesn't make the other up to date, and a
-    /// rebuild (for the other's games, a patch, a renewed profile) is installed on each again.
-    func testAnotherBuildOrOtherGamesAreInstalled() {
+    /// rebuild (a renewed profile, a new companion) is installed on each again.
+    func testAnotherBuildIsInstalled() {
         XCTAssertEqual(need(build: "b2", record: record(), app: .present(url: here)), .olderBuild)
         XCTAssertEqual(need(build: nil, record: record(), app: .present(url: here)), .olderBuild)
-        XCTAssertEqual(need(record: record(flavors: [.classicEra]), app: .present(url: here)), .otherGames)
+    }
+
+    /// The install this Mac made, of a build that isn't complete (isComplete: a new companion's launcher and
+    /// shims, another team, a profile about to run out): Play builds again before it installs (updateBuild),
+    /// so Setup Assistant's install step offers Update too, not "Installed" (it said "up to date" for an
+    /// iPhone the next Play rebuilt for a new companion's resources). A missing app still says so.
+    func testAnIncompleteBuildIsNotUpToDate() {
+        func need(_ record: ClientBuild.Installed?, _ app: Device.AppState, complete: Bool) -> ClientBuild.InstallNeed {
+            ClientBuild.installNeed(build: "b1", record: record, app: app, complete: complete)
+        }
+        for app in [Device.AppState.present(url: here), .unknown] {
+            XCTAssertEqual(need(record(), app, complete: false), .olderBuild)
+            XCTAssertEqual(SetupStatus.installState(need(record(), app, complete: false), wake: nil).button, "Update")
+            XCTAssertEqual(need(record(), app, complete: true), .upToDate)
+        }
+        XCTAssertEqual(need(record(), .missing, complete: false), .notOnDevice)
+        XCTAssertEqual(need(nil, .present(url: here), complete: false), .notFromThisMac)
     }
 
     /// devicectl's listing of every app: a listing without the device's built-in apps is cut short and says
@@ -84,6 +97,19 @@ final class ClientInstallTests: XCTestCase {
         XCTAssertEqual(Device.appState("TEAM.slashplayed", in: [maps]), .unknown)
         XCTAssertEqual(Device.appState("TEAM.slashplayed", in: [maps, ours]), .unknown)
         XCTAssertEqual(need(record: record(), app: Device.appState("TEAM.slashplayed", in: [])), .upToDate)
+    }
+
+    /// The client the companion stops before a copy is this team's: with two teams' apps on one iPhone, Play
+    /// stopped the other's running game (2026-11-09). Executables as devicectl lists them.
+    func testClientPIDIsThisTeamsApp() {
+        let other: [String: Any] = ["executable": there + "slashplayed", "processIdentifier": 29429]
+        let ours: [String: Any] = ["executable": here + "slashplayed", "processIdentifier": 29783]
+        let launchd: [String: Any] = ["executable": "file:///sbin/launchd", "processIdentifier": 1]
+        XCTAssertEqual(Device.clientPID(in: [launchd, other, ours], app: .present(url: here)), 29783)
+        XCTAssertNil(Device.clientPID(in: [launchd, other], app: .present(url: here)))
+        XCTAssertNil(Device.clientPID(in: [launchd, other], app: .missing))
+        // An app listing cut short says nothing about which: any Slashplayed's, as before.
+        XCTAssertEqual(Device.clientPID(in: [launchd, other], app: .unknown), 29429)
     }
 
     /// devicectl lockState's JSON, as captured: an unlocked iPhone answers passcodeRequired; an unworn
@@ -135,8 +161,40 @@ final class ClientInstallTests: XCTestCase {
         ClientBuild.setInstalled(withBundle, for: pad, defaults)
         XCTAssertEqual(ClientBuild.installed(pad, defaults), withBundle)
         XCTAssertNil(ClientBuild.installed(phone, defaults))
-        XCTAssertEqual(ClientBuild.installNeed(build: "b1", games: games, record: ClientBuild.installed(phone, defaults),
+        XCTAssertEqual(ClientBuild.installNeed(build: "b1", record: ClientBuild.installed(phone, defaults),
                                                app: .present(url: there)), .notFromThisMac)
+    }
+
+    /// An older companion's Update Games on This Device settings go, and so do the games its install records
+    /// listed; the record itself, and every other setting, stays. Run again, it finds nothing.
+    func testUpdateGamesOnThisDevicesSettingsAreForgotten() throws {
+        let name = "sp-install-tests-\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        addTeardownBlock { defaults.removePersistentDomain(forName: name) }
+        let phone = Device(name: "Phone", udid: "phone", kind: .iPhone), pad = Device(name: "Pad", udid: "pad", kind: .iPad)
+        defaults.set(true, forKey: "updateGames.phone")
+        defaults.set("ABCDEF", forKey: "identityPushed.phone")
+        defaults.set("A", forKey: "identityPushedSource.phone")
+        defaults.set("B", forKey: "signingSource")
+        defaults.set(["build": "b1", "flavors": ["classic_era", "retail"], "url": here, "bundleID": "TEAM.slashplayed"],
+                     forKey: ClientBuild.installedKey(phone))
+        ClientBuild.setInstalled(record(), for: pad, defaults)
+        defaults.set(["classic_era", "retail"], forKey: "games.phone")
+        defaults.set("retail", forKey: "playGame.phone")
+        defaults.set(false, forKey: "updateGamesSoon")  // not one of its keys, only alike
+
+        XCTAssertEqual(ClientBuild.forgetDeviceUpdates(defaults),
+                       ["identityPushed.phone", "identityPushedSource.phone", "installedClient.phone.flavors", "signingSource", "updateGames.phone"])
+        for key in ["updateGames.phone", "identityPushed.phone", "identityPushedSource.phone", "signingSource"] {
+            XCTAssertNil(defaults.object(forKey: key), key)
+        }
+        XCTAssertNil(defaults.dictionary(forKey: ClientBuild.installedKey(phone))?["flavors"])
+        XCTAssertEqual(ClientBuild.installed(phone, defaults), ClientBuild.Installed(build: "b1", url: here, bundleID: "TEAM.slashplayed"))
+        XCTAssertEqual(ClientBuild.installed(pad, defaults), record())
+        XCTAssertEqual(defaults.stringArray(forKey: "games.phone"), ["classic_era", "retail"])
+        XCTAssertEqual(defaults.string(forKey: "playGame.phone"), "retail")
+        XCTAssertNotNil(defaults.object(forKey: "updateGamesSoon"))
+        XCTAssertEqual(ClientBuild.forgetDeviceUpdates(defaults), [])
     }
 
     /// devicectl's error for a copy into the data container of an app that isn't installed (as rc6's

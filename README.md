@@ -108,17 +108,16 @@ In-game voice chat isn't supported on the device yet
 
 ## Requirements
 
-- An **Apple Silicon Mac** with macOS 15 or later and Xcode. No Mac? For an iPad or iPhone, a tool for
-  Windows and Linux is in testing: see [Setting up without a Mac](docs/setup-without-a-mac.md).
-  Vision Pro needs a Mac.
-- An **Apple ID signed in to Xcode**. A free one works, and the app is signed again every 7 days; a
-  paid Apple Developer Program membership signs it for a year.
+- An **Apple Silicon Mac** with macOS 15 or later and Xcode, or, for an iPad or iPhone, a **Windows or
+  Linux** computer (see [On Windows or Linux](#on-windows-or-linux)). Vision Pro needs a Mac.
+- An **Apple ID**, signed in to Xcode on a Mac. A free one works, and the app is signed again every 7
+  days; a paid Apple Developer Program membership signs it for a year.
 - Your device on **iPadOS 26, iOS 26, or visionOS 27**. Setup walks you through pairing it with the
-  Mac and turning on Developer Mode.
+  computer and turning on Developer Mode.
 - A **Battle.net account** with an active World of Warcraft subscription. The game doesn't need to be
   installed on the Mac.
-- A **hardware keyboard** for typing in the game, which has no on-screen keyboard. On an iPhone, a
-  mouse needs AssistiveTouch on.
+- On a Vision Pro, a **hardware keyboard** for typing in the game, which has no on-screen keyboard
+  there (an iPad or iPhone has one). On an iPhone, a mouse needs AssistiveTouch on.
 - **[LocalDevVPN](https://apps.apple.com/app/id6755608044)**, free on the App Store, turned on when
   the game starts.
 - **Free space** on the device:
@@ -164,12 +163,13 @@ companion's **Help > Export Diagnostics…**.
 
 ## How it works
 
-The companion downloads the Mac client from Blizzard, rewrites its load commands to point at
-Slashplayed's shim libraries, and signs it with your Apple ID. On the device, the shims stand in for
-AppKit, CoreAudio, and the other macOS frameworks, and a small helper prepares the client's
-executable memory under TXM at each launch (that's what LocalDevVPN is for).
-[architecture.md](docs/architecture.md) has the whole pipeline, and [research.md](docs/research.md)
-the experiments behind it.
+The companion builds Slashplayed, signs it with your Apple ID, and installs it. The game itself is never
+changed or signed: the companion downloads the Mac client from Blizzard and copies it to the device as it
+is, or the device downloads it itself, and Slashplayed loads it with a loader of its own. On the device,
+the shims stand in for AppKit, CoreAudio, and the other macOS frameworks, and a small helper prepares the
+client's executable memory under TXM at each launch (that's what LocalDevVPN is for).
+[How Slashplayed works](docs/architecture.md) is the overview, [the internals](docs/internals/README.md)
+have each part in detail, and [research.md](docs/research.md) the experiments behind it.
 
 ## Contributing
 

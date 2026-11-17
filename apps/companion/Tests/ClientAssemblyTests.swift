@@ -1,27 +1,22 @@
 import Security
 import XCTest
 
-/// ClientAssembly's steps on the client-shaped loadertest fixture (Loadertest.client). No Blizzard file is
-/// read, except by the opt-in comparison at the end.
+/// ClientAssembly's app, its templates and stamps, and the client-shaped loadertest fixture (Loadertest.client)
+/// the bind check's tests share. No Blizzard file is read.
 final class ClientAssemblyTests: XCTestCase {
     static let repo = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appending(path: "../../..").standardizedFileURL
     static let scratch = FileManager.default.temporaryDirectory.appending(path: "sp-client-assembly-tests-\(getpid())")
     static var fixture: URL { try! Loadertest.client }
-    static var rewriteMap: [(from: String, to: String)] {
-        get throws {
-            try ClientAssembly.rewriteMap(String(contentsOf: repo.appending(path: "shims/generated/rewrite-map.txt"), encoding: .utf8))
-        }
-    }
 
-    /// Builds the fixture (once per test process: BindCheckTests and DeviceAssemblyTests share it).
+    /// Builds the fixture (once per test process: BindCheckTests shares it).
     override class func setUp() {
         super.setUp()
         try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
         _ = fixture
     }
 
-    /// Stand-ins for the app's licenses/ (bundle-resources.sh copies scripts/build-zsign.sh's, build-idevice.sh's,
-    /// and fetch-font.sh's) and the start screen's font.
+    /// Stand-ins for the app's licenses/ (bundle-resources.sh copies scripts/build-idevice.sh's and
+    /// fetch-font.sh's) and the start screen's font.
     static func writeLicenses(in res: URL) throws {
         let dir = res.appending(path: "licenses")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -81,62 +76,11 @@ final class ClientAssemblyTests: XCTestCase {
     }
 
     func testFixtureIsShapedLikeAClient() throws {
-        let data = try Data(contentsOf: Self.fixture)
-        XCTAssertTrue(MachO.isFat(data))
         let thin = try dir("thin").appending(path: "a")
         try Self.run(["lipo", "-thin", "arm64", Self.fixture.path, "-output", thin.path])
         let names = try MachO.loadedDylibs(Data(contentsOf: thin))
         XCTAssertTrue(names.contains("/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit"))
         XCTAssertTrue(names.contains("/usr/lib/libSystem.B.dylib"))
-    }
-
-    func testPreparesADeviceImageForEachPlatform() async throws {
-        for platform in [ClientAssembly.Platform.xros, .ios] {
-            let out = try dir(platform.name).appending(path: "wow-toy")
-            let changed = try await ClientAssembly.prepareClient(Self.fixture, to: out, rewriteMap: Self.rewriteMap, platform: platform)
-            let d = try Data(contentsOf: out)
-            XCTAssertFalse(MachO.isFat(d))
-            XCTAssertEqual(MachO.u32(d, 4), 0x0100_000C, "arm64")
-            XCTAssertEqual(MachO.u32(d, 12), MachO.bundle)
-            let version = try XCTUnwrap(MachO.buildVersion(d))
-            XCTAssertEqual(version.platform, platform.machOPlatform)
-            XCTAssertEqual(version.minOS >> 16, UInt32(platform.minOS.split(separator: ".")[0]))
-            XCTAssertEqual(try ClientAssembly.unrewrittenLoadCommands(out), [])
-            let names = try MachO.loadedDylibs(d)
-            XCTAssertTrue(names.contains("@rpath/libspAppKit.dylib"))
-            XCTAssertTrue(names.contains("@rpath/libspSystem.dylib"))
-            XCTAssertEqual(try rpaths(d), ["@executable_path/Frameworks"])
-            // Today's linker leaves zero-fill offsets 0 (the client's didn't; the retype test plants one).
-            XCTAssertEqual(changed, [])
-            XCTAssertFalse(try zeroFillOffsets(d).isEmpty)
-            XCTAssertTrue(try zeroFillOffsets(d).allSatisfy { $0 == 0 })
-        }
-    }
-
-    func testRetypeChangesOnlyTheHeaderAndZeroFillOffsets() throws {
-        let thin = try dir("retype").appending(path: "a")
-        try Self.run(["lipo", "-thin", "arm64", Self.fixture.path, "-output", thin.path])
-        // Give __thread_bss a file offset, as the client's linker did.
-        var before = try Data(contentsOf: thin)
-        let section = try XCTUnwrap(zeroFillSections(before).first { $0.name == "__thread_bss,__DATA" })
-        MachO.setU32(&before, section.header + 48, 0x1234)
-        var after = before
-        XCTAssertEqual(try MachO.retype(&after), ["__thread_bss,__DATA: zero-fill offset 0x1234 -> 0"])
-        XCTAssertEqual(MachO.u32(after, section.header + 48), 0)
-        let differing = Set(zip(before.indices, zip(before, after)).filter { $0.1.0 != $0.1.1 }.map(\.0))
-        XCTAssertTrue(differing.contains(12))
-        XCTAssertTrue(differing.allSatisfy { $0 < 32 + Int(MachO.u32(before, 20)) }, "only load commands change")
-        XCTAssertEqual(after.count, before.count)
-        // A bundle can't be retyped again.
-        XCTAssertThrowsError(try MachO.retype(&after))
-    }
-
-    func testUnmappedLibraryIsReportedUnrewritten() async throws {
-        let map = try Self.rewriteMap.filter { !$0.from.contains("/AppKit.framework/") }
-        let out = try dir("unmapped").appending(path: "wow-toy")
-        try await ClientAssembly.prepareClient(Self.fixture, to: out, rewriteMap: map, platform: .xros)
-        XCTAssertEqual(try ClientAssembly.unrewrittenLoadCommands(out),
-                       ["/System/Library/Frameworks/AppKit.framework/Versions/C/AppKit"])
     }
 
     func testTemplatesFillIn() throws {
@@ -160,6 +104,10 @@ final class ClientAssemblyTests: XCTestCase {
             XCTAssertEqual(plist["UISupportedInterfaceOrientations~ipad"] as? [String],
                            platform == .ios ? ["UIInterfaceOrientationPortrait", "UIInterfaceOrientationPortraitUpsideDown",
                                                "UIInterfaceOrientationLandscapeLeft", "UIInterfaceOrientationLandscapeRight"] : nil)
+            // An iPad or iPhone runs it in Game Mode and lets Settings remap a controller for it.
+            XCTAssertEqual(plist["LSSupportsGameMode"] as? Bool, platform == .ios ? true : nil)
+            XCTAssertEqual((plist["GCSupportedGameControllers"] as? [[String: String]])?.first?["ProfileName"],
+                           platform == .ios ? "ExtendedGamepad" : nil)
         }
         let ents = ClientAssembly.entitlements(template: try String(contentsOf: client.appending(path: "entitlements.plist"), encoding: .utf8),
                                                team: "ABCDE12345", bundleID: "ABCDE12345.slashplayed")
@@ -198,14 +146,14 @@ final class ClientAssemblyTests: XCTestCase {
                                                                           "Version": "1.2.3.45678"]])
     }
 
-    /// build.sh's awk writes the same stamp for the fixture .build.info (flavor.sh's product for the flavor
-    /// included), so the two producers agree byte for byte without a client.
-    func testBuildShWritesTheSameStamp() throws {
+    /// seed-client.sh's awk writes the same stamp for the fixture .build.info (flavor.sh's product for the
+    /// flavor included), so the two producers agree byte for byte without a client.
+    func testSeedClientWritesTheSameStamp() throws {
         let root = try dir("stamp-sh")
         try Self.buildInfo.write(to: root.appending(path: ".build.info"), atomically: true, encoding: .utf8)
-        let script = try String(contentsOf: Self.repo.appending(path: "apps/client/build.sh"), encoding: .utf8)
+        let script = try String(contentsOf: Self.repo.appending(path: "apps/client/seed-client.sh"), encoding: .utf8)
         let start = try XCTUnwrap(script.range(of: #"awk -F'|' -v p="$P" '"#)).upperBound
-        let end = try XCTUnwrap(script.range(of: #"' "$SP_INSTALL/.build.info""#, range: start..<script.endIndex)).lowerBound
+        let end = try XCTUnwrap(script.range(of: #"' "$INFO" > "$OUT/spbuild-$F""#, range: start..<script.endIndex)).lowerBound
         let awk = script[start..<end]
         let result = try TestShell.run("/usr/bin/awk", ["-F|", "-v", "p=wow_classic_era", String(awk),
                                                          root.appending(path: ".build.info").path])
@@ -231,22 +179,22 @@ final class ClientAssemblyTests: XCTestCase {
         try Data("shim".utf8).write(to: res.appending(path: "libspAppKit.dylib"))
         try FileManager.default.createDirectory(at: res.appending(path: "icon"), withIntermediateDirectories: true)
         try Data("car".utf8).write(to: res.appending(path: "icon/Assets.car"))
-        try Self.writeManifest(for: Self.fixture, to: res.appending(path: "exports.json"))
+        try Data("{}".utf8).write(to: res.appending(path: "exports.json"))
         try Self.writeLicenses(in: res)
         let app = base.appending(path: "Slashplayed.app"), ents = base.appending(path: "entitlements.plist")
         let helperEnts = base.appending(path: "helper-entitlements.plist")
-        var lines: [String] = []
-        try await ClientAssembly.assemble(app: app, clients: [("toy", Self.fixture, Self.stamp)], platform: .xros,
-                                          platformResources: res, templates: templates, addons: Self.repo.appending(path: "addon"), team: "ABCDE12345",
-                                          bundleID: "ABCDE12345.slashplayed", entitlements: ents,
-                                          helperEntitlements: helperEnts) { lines.append($0) }
+        try await ClientAssembly.assemble(app: app, platform: .xros, platformResources: res, templates: templates,
+                                          addons: Self.repo.appending(path: "addon"), team: "ABCDE12345",
+                                          bundleID: "ABCDE12345.slashplayed", entitlements: ents, helperEntitlements: helperEnts)
+        // No game client (no wow-* or spbuild-*): the launcher loads each from Library/spgames.
         let files = Set(try FileManager.default.subpathsOfDirectory(atPath: app.path))
-        XCTAssertEqual(files, Set<String>(["wow-toy", "spbuild-toy", "slashplayed", "Frameworks", "Frameworks/libspAppKit.dylib", "Assets.car", "Info.plist",
+        XCTAssertEqual(files, Set<String>(["slashplayed", "Frameworks", "Frameworks/libspAppKit.dylib", "Assets.car", "Info.plist",
                               "sproots.plist", "PlugIns", "PlugIns/SPJitHelper.appex", "PlugIns/SPJitHelper.appex/SPJitHelper",
                               "PlugIns/SPJitHelper.appex/Info.plist", "flavors.plist", "wow.icns",
-                              "exports.json", "rewrite-map.txt", "licenses", "licenses/zsign.txt", "licenses/openssl.txt",
-                              "licenses/idevice.txt", "licenses/rust-std.html", "licenses/goodmountain.txt",
-                              "Goodmountain-Regular.otf", "addons", "addons/SPMovie", "addons/SPHover", "addons/SPTouchBars"])
+                              "exports.json", "rewrite-map.txt", "licenses",
+                              "licenses/idevice.txt", "licenses/rust-std.html", "licenses/spapple.txt", "licenses/goodmountain.txt",
+                              "Goodmountain-Regular.otf", "addons", "addons/SPMovie", "addons/SPHover",
+                              "addons/SPKeyboard", "addons/SPTouchBars"])
                        .union(ClientAssembly.addonFiles.map { "addons/" + $0 }))
         // The addons the launcher places (sp_addons_place), byte for byte as addon/ has them.
         for file in ClientAssembly.addonFiles {
@@ -255,7 +203,7 @@ final class ClientAssemblyTests: XCTestCase {
         }
         // The launcher's bind check of a newer build reads the same manifest as the companion's.
         XCTAssertEqual(try Data(contentsOf: app.appending(path: "exports.json")), try Data(contentsOf: res.appending(path: "exports.json")))
-        // The launcher's assembly of a newer build's image (spassemble.m) reads the same rewrite map.
+        // The launcher opens the client's libraries through the same rewrite map (spguestlaunch.m).
         XCTAssertEqual(try Data(contentsOf: app.appending(path: "rewrite-map.txt")), try Data(contentsOf: res.appending(path: "rewrite-map.txt")))
         // The client's setup dialog only needs its icon's path to resolve: an empty file, as build.sh writes it.
         XCTAssertEqual(try Data(contentsOf: app.appending(path: "wow.icns")), Data())
@@ -268,30 +216,9 @@ final class ClientAssemblyTests: XCTestCase {
         let helperEntitlements = try XCTUnwrap(NSDictionary(contentsOf: helperEnts))
         XCTAssertEqual(helperEntitlements["application-identifier"] as? String, "ABCDE12345.ABCDE12345.slashplayed.helper")
         XCTAssertNil(helperEntitlements["com.apple.developer.kernel.increased-memory-limit"])
-        XCTAssertEqual(try String(contentsOf: app.appending(path: "spbuild-toy"), encoding: .utf8), Self.stamp.text)
-        XCTAssertEqual(lines.first, "bundling toy")
-        XCTAssertTrue(lines.contains { $0.hasPrefix("bind check: ") && $0.hasSuffix(" imports resolve") }, "\(lines)")
     }
 
-    func testAssembleStopsOnAnUnmappedLibrary() async throws {
-        let base = try dir("assemble-unmapped")
-        let res = base.appending(path: "xros")
-        try FileManager.default.createDirectory(at: res, withIntermediateDirectories: true)
-        try Self.rewriteMap.filter { !$0.from.contains("/Metal.framework/") }.map { "\($0.from) -> \($0.to)\n" }.joined()
-            .write(to: res.appending(path: "rewrite-map.txt"), atomically: true, encoding: .utf8)
-        try Self.writeManifest(for: Self.fixture, to: res.appending(path: "exports.json"))
-        do {
-            try await ClientAssembly.assemble(app: base.appending(path: "Slashplayed.app"), clients: [("toy", Self.fixture, Self.stamp)],
-                                              platform: .xros, platformResources: res, templates: Self.repo.appending(path: "apps/client"), addons: Self.repo.appending(path: "addon"),
-                                              team: "T", bundleID: "T.slashplayed", entitlements: base.appending(path: "e.plist"),
-                                              helperEntitlements: base.appending(path: "h.plist")) { _ in }
-            XCTFail("assembled with an unrewritten load command")
-        } catch {
-            XCTAssertTrue(error.localizedDescription.contains("Metal.framework"), error.localizedDescription)
-        }
-    }
-
-    /// The stamp ClientBuild makes from the patch service's version row is the one build.sh makes from an
+    /// The stamp ClientBuild makes from the patch service's version row is the one seed-client.sh makes from an
     /// install of that build.
     func testStampFromVersionRowMatchesBuildInfo() throws {
         let key = String(repeating: "a1", count: 16), cdnKey = String(repeating: "b2", count: 16)
@@ -317,102 +244,5 @@ final class ClientAssemblyTests: XCTestCase {
                         "ddi/Cryptex1,CryptexInfoPlist", "ddi/Cryptex1,GenericVolume"])
         XCTAssertThrowsError(try DeveloperDiskImage.cryptexFiles(["BuildIdentities": [identity("Other", "no")]]))
         XCTAssertThrowsError(try DeveloperDiskImage.cryptexFiles(["BuildIdentities": [identity("Developer Disk Image Cryptex", "../up")]]))
-    }
-
-    /// Opt-in, local only (reads the installed clients' build, fetches from Blizzard's CDN): compares the
-    /// companion's client images, made from the CDN's arm64 slice as ClientBuild makes them, and the
-    /// launcher's (apps/client/spassemble.m, as a device makes them) from the same slice, with those
-    /// apps/client/build.sh made from the installed clients, byte for byte: their inputs differ, the images
-    /// don't. Build them unsigned first, e.g. with an identity that can't sign (build.sh stops at codesign,
-    /// after the images are made):
-    ///   SP_PLATFORM=xros SP_NO_INSTALL=1 SP_SIGN_ID=none SP_OUT=$TMPDIR/cmp-xros apps/client/build.sh
-    /// then run the tests with TEST_RUNNER_SP_COMPARE_APP=$TMPDIR/cmp-xros/Slashplayed.app
-    /// TEST_RUNNER_SP_COMPARE_PLATFORM=xros (SP_INSTALL as for build.sh). The slice is of the install's
-    /// build (the CDN's current one once Battle.net has updated it); the stamp from the patch service's
-    /// row is compared too when that's the install's build. The CDN's files go to $TMPDIR and are deleted.
-    func testMatchesBuildShOnInstalledClients() async throws {
-        let env = ProcessInfo.processInfo.environment
-        guard let reference = env["SP_COMPARE_APP"].map(URL.init(fileURLWithPath:)),
-              let platform = env["SP_COMPARE_PLATFORM"].flatMap(ClientAssembly.Platform.named) else {
-            throw XCTSkip("set SP_COMPARE_APP and SP_COMPARE_PLATFORM to compare with build.sh's output")
-        }
-        let install = URL(fileURLWithPath: env["SP_INSTALL"] ?? "/Applications/World of Warcraft")
-        let images = try FileManager.default.contentsOfDirectory(atPath: reference.path).filter { $0.hasPrefix("wow-") }
-        XCTAssertFalse(images.isEmpty)
-        let scratch = try dir("compare-cdn")
-        let cdn = BlizzardCDN(cache: scratch.appending(path: "cdn"))
-        for image in images {
-            let flavor = try XCTUnwrap(Flavor(rawValue: String(image.dropFirst(4))))
-            let row = try XCTUnwrap(try GameStore.buildInfo(install)[flavor.product])
-            let region = try XCTUnwrap(row["Branch"]).lowercased()
-            let slice = try await cdn.connected(product: flavor.product, region: region)
-                .slice(product: flavor.product, region: region, buildConfig: try XCTUnwrap(row["Build Key"]),
-                       cdnConfig: try XCTUnwrap(row["CDN Key"]), executable: flavor.clientPath).slice
-            let out = try dir("compare").appending(path: image)
-            try await ClientAssembly.prepareClient(slice, to: out, rewriteMap: Self.rewriteMap, platform: platform)
-            let ours = try Data(contentsOf: out), theirs = try Data(contentsOf: reference.appending(path: image))
-            XCTAssertTrue(ours == theirs, "\(image) from the CDN differs from build.sh's (\(ours.count) vs \(theirs.count) bytes)")
-            print("compare: \(platform.name) \(image) from the CDN identical to build.sh's (\(ours.count) bytes)")
-            // The third producer: the launcher's assembly on the device (apps/client/spassemble.m), of the same slice.
-            let device = try DeviceAssemblyTests.launcherImage(Data(contentsOf: slice), map: DeviceAssemblyTests.mapText, platform: platform)
-            XCTAssertTrue(device.image == theirs, "\(image) from spassemble.m differs from build.sh's")
-            print("compare: \(platform.name) \(image) from spassemble.m identical to build.sh's")
-            // Its stamp: build.sh's from the install's .build.info, ClientBuild's from the version row.
-            let stamp = try String(contentsOf: reference.appending(path: ClientAssembly.Stamp.fileName(flavor.rawValue)), encoding: .utf8)
-            XCTAssertEqual(try ClientAssembly.Stamp.from(product: flavor.product, row: row).text, stamp)
-            let current = try await cdn.version(product: flavor.product, region: region)
-            if current.buildConfig == row["Build Key"] {
-                XCTAssertEqual(ClientAssembly.Stamp.from(product: flavor.product, version: current).text, stamp)
-                print("compare: spbuild-\(flavor.rawValue) from the patch service identical")
-            } else {
-                print("compare: the install isn't Blizzard's current \(current.versionsName), so the stamp is compared with the install's row only")
-            }
-            try? FileManager.default.removeItem(at: out)
-        }
-        try? FileManager.default.removeItem(at: scratch)
-        // The bundle ID and version as build.sh stamped them (the tests have no host app, so their
-        // Bundle.main isn't the companion whose version the assembly would take).
-        let referenceInfo = NSDictionary(contentsOf: reference.appending(path: "Info.plist"))
-        let info = ClientAssembly.infoPlist(template: try String(contentsOf: Self.repo.appending(path: "apps/client/Info.plist"), encoding: .utf8),
-                                            bundleID: try XCTUnwrap(referenceInfo?["CFBundleIdentifier"] as? String),
-                                            platform: platform,
-                                            version: try XCTUnwrap(referenceInfo?["CFBundleShortVersionString"] as? String))
-        XCTAssertEqual(info, try String(contentsOf: reference.appending(path: "Info.plist"), encoding: .utf8))
-        let roots = try dir("compare").appending(path: "sproots.plist")
-        try await ClientAssembly.exportRootCAs(to: roots)
-        XCTAssertEqual(NSArray(contentsOf: roots), NSArray(contentsOf: reference.appending(path: "sproots.plist")))
-    }
-
-    // MARK: Helpers
-
-    /// LC_RPATH entries.
-    private func rpaths(_ d: Data) throws -> [String] {
-        var paths: [String] = []
-        try MachO.forEachCommand(d) { cmd, off in
-            guard cmd == 0x8000_001C else { return }
-            let start = d.startIndex + off + Int(MachO.u32(d, off + 8))
-            paths.append(String(decoding: d[start...].prefix { $0 != 0 }, as: UTF8.self))
-        }
-        return paths
-    }
-
-    /// The image's zero-fill sections ("sect,seg") and where their headers are.
-    private func zeroFillSections(_ d: Data) throws -> [(name: String, header: Int)] {
-        var sections: [(String, Int)] = []
-        try MachO.forEachCommand(d) { cmd, off in
-            guard cmd == MachO.lcSegment64 else { return }
-            for i in 0..<Int(MachO.u32(d, off + 64)) {
-                let s = off + 72 + i * 80
-                guard MachO.zeroFillTypes.contains(MachO.u32(d, s + 64) & 0xFF) else { continue }
-                let name = { (o: Int) in String(decoding: d[(d.startIndex + o)..<(d.startIndex + o + 16)].prefix { $0 != 0 }, as: UTF8.self) }
-                sections.append(("\(name(s)),\(name(s + 16))", s))
-            }
-        }
-        return sections
-    }
-
-    /// The file offsets of the image's zero-fill sections.
-    private func zeroFillOffsets(_ d: Data) throws -> [UInt32] {
-        try zeroFillSections(d).map { MachO.u32(d, $0.header + 48) }
     }
 }

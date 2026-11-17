@@ -1,7 +1,9 @@
 # CLAUDE.md
 
 Notes for agents working in this repo. Users' docs are in `README.md` and `docs/`; how everything
-works is `docs/architecture.md`. Read that before changing the pipeline, the shims or the launcher.
+works is `docs/architecture.md` (the overview) and `docs/internals/` (each part in detail; its
+`README.md` says which page covers what). Read the page that covers what you're changing before you
+change the pipeline, the shims, or the launcher, and put new detail on that page, not the overview.
 
 ## Where work happens
 
@@ -16,10 +18,10 @@ the owner asks for it.
 
 - `apps/companion/`: the Mac companion (SwiftUI, XcodeGen `project.yml`, target `SPCompanion`,
   `com.strawdynamics.slashplayed.companion`). `Sources/` is the whole user-time pipeline in Swift:
-  `ClientAssembly.swift` (thin, rewrite, set platform, retype, assemble), `BindCheck.swift`,
-  `Signing.swift`, `DeviceIdentity.swift` (the signing identity a device updates games with: the opt-in,
-the push, the export), `SlashplayedCertificate.swift` (a paid team's own certificate for that: key, request,
-  `.cer` checks, in a keychain off the search list), `GameStore.swift`/`GameFiles.swift` (archive selection, sync), `BlizzardCDN.swift` (the
+  `ClientAssembly.swift` (the device app, which holds no game), `ClientBuild.swift` (its build and install,
+  and each game's unchanged slice copied into the device's `Library/spgames` when the device's is missing or
+  older), `BindCheck.swift` (each slice's imports against the shims, before it's copied), `Signing.swift`,
+  `GameStore.swift`/`GameFiles.swift` (archive selection, sync), `BlizzardCDN.swift` (the
   patch service and CDN: version rows, configs, and the client's arm64 slice), `ClientLauncher.swift`
   (launch, following the on-device prepare), `TokenRelay.swift`, `Pairing.swift` (the device's
   RemotePairing record over USB, through idevice, and lockdown's free space), `DeveloperDiskImage.swift` (Xcode's DDI into the
@@ -27,51 +29,63 @@ the push, the export), `SlashplayedCertificate.swift` (a paid team's own certifi
   At run time it reads only its bundled resources (`bundle-resources.sh`), never the repo, and runs only
   `/usr/bin` tools and `xcrun`. It links idevice statically (`idevice-config.sh` writes the xcconfig from
   `work/idevice/macos/`).
-- `apps/client/`: the device app. `launcher.m` (the `slashplayed` executable, dlopens `wow-<flavor>`),
-  `spjit.m` (its side of the JIT helper), `sppair.m` (the headset's pairing; its screen is `sppairscreen.swift`), `spvpn.m` (the
+- `apps/client/`: the device app. `launcher.m` (the `slashplayed` executable: picks the game, retires what it can't load, and loads
+  `Library/spgames/wow-<flavor>`, the game's unchanged slice, with spguest),
+  `spjit.m` (its side of the JIT helper, and `sp_relaunch`, the way back to the start screen when a game quits), `sppair.m` (the headset's pairing; its screen is `sppairscreen.swift`), `spvpn.m` (the
   wait for LocalDevVPN; its screen is `spvpnscreen.swift`), `spstyle.swift` (the launcher's look, shared by every
   SwiftUI screen: one game button, `GameButtonStyle`), `splogin.m` (the Battle.net sign-in: the keychain and `login.txt`; its screen is `spsignin.swift`),
   `spstart.m` (the start screen, every launch that doesn't name a game: the wait for a tap, `SP_START_TEXT_SIZE`, Goodmountain's
   registration, `sp_face`; its screen is `spstartscreen.swift`; its logo is the icon's own vectors, `splogo.h`, and its face
-  Goodmountain, never committed: `scripts/fetch-font.sh`), `spsettings.swift` (the start screen's Settings sheet: the forgets,
-  each game's build, Open in Files, and Reset Game Settings, Acknowledgements, and the `SP_START_DRILL` states), `sppatch.m` (the check for a newer build; its screen is `sppatchscreen.swift`; it fetches the new client with
+  Goodmountain, never committed: `scripts/fetch-font.sh`), `spsettings.swift` (the start screen's Settings sheet: the sign-in's forget,
+  each game's build and where it came from (`spsource-<flavor>`), Open in Files, and Reset Game Settings, Acknowledgements, and the `SP_START_DRILL` states), `spaddons.m` (each
+  game's addons: the catalog, `paulstraw/slashplayed-addons`, GitHub links, a zip reader over zlib, and the record of what it
+  installed, `Library/spaddons-<flavor>.json`; Foundation only, tested in the companion's `AddonsTests`; its Settings pages are
+  `spaddonsscreen.swift`), `sppatch.m` (the check for a newer build; its screen is `sppatchscreen.swift`; it fetches the new client with
   `spcdn.m`, the port of `BlizzardCDN.swift`, and checks its imports with `spbind.m`; both Foundation only,
-  tested in the companion's tests), `spassemble.m` (the client image made on the device from that
-  slice: install_name_tool's, vtool's, and retype.py's steps, ported), `spsign.m` (signing on the device:
-  the identity the Mac pushes, into the keychain, and zsign through `spzsign.cpp`, and which certificate an
-  update's image is signed with against the profiles the app can see; tested in the companion's tests), `flavors.plist` (each game's
+  tested in the companion's tests; an Update or an install puts that slice in place, signing nothing), `spapple.m` (the
+  Apple token: the one file that holds it, and the app's renewed profiles from Apple through `spapple/`, a Rust
+  static library on the vendored isideload, `scripts/build-spapple.sh`; the helper installs them through misagent,
+  `spjit.m`'s `sp_jit_profiles`; and the optional Apple sign-in that makes a token on the device, its screen
+  `spapplescreen.swift`), `flavors.plist` (each game's
   name, `.build.info` product, client path, Battle.net arguments, and addon number: the one list, read by the
-  launcher, the companion's `Flavor.swift`, and `scripts/flavor.sh`),
+  launcher, the companion's `Flavor.swift`, and `scripts/flavor.sh`), `spguest.c`/`.h` and `spguest_tlv.S`
+  (spguest, a loader of our own: the unchanged, unsigned client mapped, bound, and run without dyld;
+  `spguestlaunch.m` is the launcher's load step and its preflight), `guesttest/` (spguest's test: a toy
+  guest of our own, `build.sh mac` on the Mac, which CI runs, and `build.sh device`/`run.sh` on a device;
+  `research/guestloadtest/README.md` has the research and the device runs),
   `helper/` (the
   on-device JIT helper, a classic app extension on idevice, `Pair.swift` its pair-setup;
   `build-helper.sh`; jittest builds the same source), Info.plist and
   entitlements templates, `icons/` (the app icon catalogs, compiled by `build-icons.sh`),
   `signing/` (stub project for the explicit-App-ID profile), and
-  dev scripts (`build.sh`, `run.sh`, `seed.sh`, `pull-logs.sh`, `grab-token.sh`, `push-identity.sh`,
-  `retype.py`, `casc_archives.py`). `build.sh`, `ClientAssembly.swift`, and `spassemble.m` (the launcher's assembly
-  of a newer build's image on the device, tested in the companion's tests) must produce byte-identical
-  unsigned client images: change all three together.
-- `apps/companion-rs/`: `slashplayed-companion`, the host tool for an iPad or iPhone without a Mac (Windows, Linux, a
-  Mac without Xcode; Rust, `rust-toolchain.toml` pins it): `src/kit.rs` (the device kit, the unsigned app
+  dev scripts (`build.sh`, the app with no game in it, `run.sh`, `seed.sh`, `seed-client.sh`, the Mac's
+  client into `Library/spgames`, `pull-logs.sh`, `grab-token.sh`, `push-apple-token.sh`, `casc_archives.py`).
+- `apps/companion-rs/`: the host tool for an iPad or iPhone without a Mac (Windows, Linux, a Mac without Xcode;
+  Rust, `rust-toolchain.toml` pins it), two programs on one library: `slashplayed-companion` (the window,
+  "Slashplayed Companion.exe" on Windows: `src/window.rs`, `src/gui/`, egui; `SP_GUI_DRILL=<state>` opens one
+  screen with made-up data, `SP_GUI_SHOT=<png>` saves it, `SP_GUI_KIT` names a kit for a dev build) and
+  `slashplayed-cli` (`src/main.rs`). `src/flow.rs` (one install's steps and questions, behind a `Frontend` (each
+  program's prompts or screens) and a `Backend` (`live.rs`: the device and Apple)), `kit.rs` (the device kit, the unsigned app
   `scripts/release/device-kit.sh` makes at release), `device.rs` (usbmuxd, trust, Developer Mode, install,
   house_arrest, the RemotePairing record), `account.rs` (the Apple ID sign-in, memory only), `provision.rs`
   (device, App IDs, capabilities, certificate, profiles), `keystore.rs` (the signing key, in the OS's
-  credential store), `sign.rs` with `build.rs` and `zsign/` (zsign compiled in), `ddi.rs` (the pinned
+  credential store), `sign.rs` with `zsign/` (spzsign, its own crate: zsign and OpenSSL compiled in), `ddi.rs` (the pinned
   mirror DDI). `vendor/isideload/` is isideload with its LGPL signer made optional (`VENDORED.md`).
   `package.sh` packs a release build with its notices. Vision Pro stays Mac-only.
 - `shims/`: hand-written shims (`appkit/`, `audio/`, `coregraphics/`, `ident/`, `security/`, `system/`)
   and `generated/` (`gen_stubs.py`'s output, committed, one set for both platforms; it `#include`s the
   hand-written files). `exports_manifest.py` writes `exports.json`, the bind check's manifest.
-- `addon/`: the in-game addons, `SPHover` (look highlights, headset only) and `SPMovie` (a tap opens a
-  cinematic's skip dialog, every device); `addon/test/test.sh` tests both (needs lua and cc; CI runs it
-  on Linux with Lua 5.1, the game's).
+- `addon/`: the in-game addons, `SPHover` (look highlights, headset only), `SPKeyboard` (the focused
+  text box, for the on-screen keyboard; iPad and iPhone only), and `SPMovie` (a tap opens a cinematic's
+  skip dialog, every device); `addon/test/test.sh` tests them (needs lua and cc; CI runs it on Linux with
+  Lua 5.1, the game's).
 - `scripts/`: `build-idevice.sh` (idevice from source at a pinned commit, Rust pinned: `macos` for the
   companion, `ios`/`xros` for the on-device JIT helper; into `work/idevice/`, with `<platform>/licenses/`),
   `fetch-font.sh` (Goodmountain, the start screen's and the site's face, OTF and woff2, and its license, at a
   pinned commit and checked SHA-256, into `work/fonts/`: its license forbids changing the file, so it's never
   committed), `site-preview.sh` (`site/` staged as Pages deploys it, font included, served on 127.0.0.1),
-  `build-zsign.sh` (zsign with `zsign.patch` and OpenSSL from source at pinned commits: `ios`/`xros` for the launcher's signer,
-  `macos` for the companion's tests; into `work/zsign/`, with the licenses the app ships), `crate-notices.py`
+  `build-zsign.sh source` (zsign's source at a pinned commit with `zsign.patch`, into `work/zsign/src/zsign`, for
+  slashplayed-companion's `zsign/build.rs`; git only, nothing built), `crate-notices.py`
   (build-idevice.sh's license texts of every linked crate, failing on one with none; `crate-licenses/` holds
   the texts of crates that ship none), `check-tree.sh` (scrub and
   no-hardcoding greps), `config.sh` (loads `config/local.env`),
@@ -80,6 +94,7 @@ the push, the export), `SlashplayedCertificate.swift` (a paid team's own certifi
   (`regen.sh`, `bucket.py`, `gen_stubs.py`, `verify_binds.py`, `check_exports.py`, `check-patch.sh`);
   `release/` (`release.sh`, `appcast-merge.sh`, `update-test.sh`).
 - `research/{jittest,loadertest,metaltest,dlopentest}`: the experiments, each with a README; `docs/research.md`.
+  `research/guestloadtest/` is a README only: its loader and toy are `apps/client/spguest.*` and `guesttest/`.
 - `work/`, `build/`: gitignored output. `work/` holds thinned clients and game data: never commit it.
 
 ## Build and test
@@ -87,21 +102,23 @@ the push, the export), `SlashplayedCertificate.swift` (a paid team's own certifi
 ```sh
 scripts/build-idevice.sh macos             # once (and after re-pinning): the companion links it
 scripts/build-idevice.sh ios; scripts/build-idevice.sh xros   # the JIT helper links these
-scripts/build-zsign.sh                     # once: zsign + OpenSSL (ios, xros: the launcher; macos: the tests)
+scripts/build-spapple.sh                   # once (and after changing apps/client/spapple): the launcher links it
 scripts/fetch-font.sh                      # once: the start screen's font and its license, into work/fonts/
 shims/build.sh <xros|ios>                  # build/<platform>/*.dylib + exports.json
 apps/companion/build.sh                    # build/companion/Slashplayed Companion.app (needs xcodegen)
 apps/companion/test.sh                     # companion unit tests; extra args go to xcodebuild
 SP_PLATFORM=ios SP_NO_INSTALL=1 apps/client/build.sh   # the script build of the device app, no install
 scripts/build-zsign.sh source; (cd apps/companion-rs && cargo test --locked && cargo build --release --locked)
-                                           # slashplayed-companion; a device run needs --kit <zip>:
+                                           # both programs; a device run needs a kit (slashplayed-cli --kit
+                                           # <zip>, or SP_GUI_KIT=<zip> for the window's dev build):
                                            # scripts/release/device-kit.sh <bundle-resources.sh --build dir> <zip>
+SP_GUEST_REFS=none apps/client/guesttest/build.sh mac   # spguest's toy on the Mac, as CI runs it
 research/<harness>/build.sh                # research harnesses (they install; no no-install switch)
 ```
 
 Some companion tests are opt-in because they read the owner's real install (see each test's doc
 comment, e.g. `TEST_RUNNER_SP_CHECK_INSTALLED=1`, `TEST_RUNNER_SP_COMPARE_STORE=1`,
-`TEST_RUNNER_SP_COMPARE_CDN=1`, `TEST_RUNNER_SP_COMPARE_BUILDS=1`, `TEST_RUNNER_SP_COMPARE_ASSEMBLY=1`). They compare against Blizzard files locally (the CDN one fetches from
+`TEST_RUNNER_SP_COMPARE_CDN=1`, `TEST_RUNNER_SP_COMPARE_BUILDS=1`). They compare against Blizzard files locally (the CDN one fetches from
 Blizzard's CDN into `$TMPDIR`); nothing from them is ever written into the repo.
 
 Companion launch flags for headless work: `-play` (Play the game the menu by Play picks, signed in on
@@ -109,9 +126,7 @@ the device; add `-skip-intro` to start without the intro movie or Retail's Scree
 `SP_SKIP_INTRO=1` does for `apps/client/run.sh`; it sets them in the device's `Config.wtf`, so they stay
 skipped there), `-update`, `-sync`, `-pull-logs`, `-export-diagnostics`, `-setup-step <n>`,
 `-check-for-updates`, `-pair` (Pair Again: an iPad or iPhone on USB gets a new RemotePairing record;
-the headset's is cleared, so its next launch pairs), `-push-identity` (what Play does about the device's
-signing identity for Update Games on This Device, alone; `DeviceIdentity.swift`), `-certificate-request`
-(a paid team's Slashplayed certificate: its key and request, `SlashplayedCertificate.swift`). These act inside the running
+the headset's is cleared, so its next launch pairs). These act inside the running
 GUI app, which doesn't quit afterwards: follow `~/Library/Logs/Slashplayed/companion.txt` and quit it.
 
 ## config/local.env
@@ -140,19 +155,41 @@ again (over an hour for Retail on the headset). Don't change it casually.
 
 - **Signing identities are credentials.** A `.p12`, its password, or a keychain export is never read
   into a log, printed or committed: sizes and validity dates only, files 0600, zeroed and deleted after the
-  copy, as `spsign.m` and `push-identity.sh` do. Test identities are made at test time in `$TMPDIR`.
+  copy. Test identities are made at test time in `$TMPDIR`.
 - **Pairing records are credentials.** A RemotePairing record (and the Mac's lockdown pair record, which
   idevice holds in memory to make one) is never read, printed or logged: sizes only, files 0600 and
   deleted after the copy, as `Pairing.swift` and `research/jittest/push-pairing.sh` do.
 - **No Blizzard bytes, ever**, in the repo, CI, fixtures or release artifacts: no client binaries
   (thinned or not), no game data, no metallibs from the client, no logs or crash reports with
   credentials. Test fixtures are built from our own code (`research/loadertest` is the model).
-- **The Apple ID is a credential.** `slashplayed-companion` (`apps/companion-rs/src/account.rs`) takes the password
-  typed by the person, uses it once for the sign-in, and zeroes it; the login lives in memory only and
-  ends with the process. Nothing about it is logged or stored, not even sizes, and no tracing subscriber
-  is ever installed (isideload's logs would carry account data). The person types it; test runs use the
-  owner's own Terminal. The tool's signing key goes only to the OS credential store and, as a .p12, to the
-  device. It never revokes a certificate a Slashplayed tool didn't make.
+- **The Apple ID is a credential.** The host tool (`apps/companion-rs/src/account.rs`, for both programs) takes the
+  password typed by the person (in the window's field, which is emptied as it's handed over, or the terminal), uses it once for the sign-in, and zeroes it; the login lives in memory only and
+  ends with the process. Nothing about it is logged or stored on the computer, not even sizes, and no
+  tracing subscriber is ever installed (isideload's logs would carry account data). The one thing that
+  outlives the process is the Apple token this sign-in makes, which goes only to the device, for the app to
+  renew its own profiles (the next rule). The person types it; test runs use the owner's own hands, in the window or their own Terminal. The
+  tool's signing key goes only to the OS credential store, never to the device. It never revokes a
+  certificate a Slashplayed tool didn't make.
+  The launcher's own Apple sign-in (opt-in, from the start screen's note and Settings: `spapple.m`, its
+  screen `spapplescreen.swift`, and `spapple`'s `login` op) is held to the same: the person types the
+  password on the device, it goes to `spapple` in one request written into a buffer zeroed after, `spapple`
+  zeroes it once the sign-in ends (isideload signs in again with it after the 2FA code, so it's held through
+  the code's wait), and nothing stores it (the zeroing is best effort: copies Foundation
+  and isideload make on the way are freed unzeroed). Nothing logs the Apple ID, the password, its size, a
+  2FA code, or the masked numbers Apple sends; the screen keeps none of them, and its fields are emptied
+  once they're sent. Only the token the sign-in makes is kept, as the next rule says. Its screen
+  says plainly that it's a second sign-in to the Apple ID through a third-party anisette server.
+- **The Apple token is a credential.** The device keeps one Apple token (the `xcode.auth` app token, its
+  adsid, and the anisette server and machine identity it was made on), and only `spapple.m` handles it: in
+  the keychain (this device only, never synced), imported from `Library/spappletoken.json`, which is zeroed
+  and deleted at once, or kept from the launcher's own sign-in's reply, which `spapple` zeroes once it's
+  read; and handed to `spapple` in memory only. Zeroing it after use is best effort: `spapple.m` and
+  `spapple` zero the buffers they own, but Foundation's and isideload's copies are freed unzeroed. What
+  holds without exception: it's never logged, and never stored anywhere but that keychain item (and the
+  pushed file until its import). Its screens keep nothing. Never the password or the GrandSlam token. Logs
+  give the stated expiry's date only, never the token, its fields, or its size; `spapple`'s errors never
+  carry it. `push-apple-token.sh` (dev) and the host tool (`apps/companion-rs`) are the only
+  things that push one, and the launcher's sign-in the only thing on the device that makes one.
 - **Never read, print or log values from `net.battle` prefs** or the exported credentials file. Sizes
   and timestamps only, as `TokenRelay.swift` does.
 - **The Battle.net sign-in is a credential too.** Only the launcher's sign-in (`splogin.m`, and its
@@ -198,8 +235,9 @@ again (over an hour for Retail on the headset). Don't change it casually.
    PyYAML. Scratch goes to `work/regen/`.
 3. Review the `shims/generated/` diff. Generated stubs only log: an import the client really uses needs
    a hand-written implementation (`gen_stubs.py` `EXTRA_CODE` / `EXTRA_INCLUDES`).
-4. If the patch changed a game's version, set its `toc` in `flavors.plist` and in both addons' TOCs
-   (`addon/SPHover/SPHover.toc`, `addon/SPMovie/SPMovie.toc`), or the game flags them as out of date
+4. If the patch changed a game's version, set its `toc` in `flavors.plist` and in the addons' TOCs
+   (`addon/SPHover/SPHover.toc`, `addon/SPMovie/SPMovie.toc`, `addon/SPKeyboard/SPKeyboard.toc`), or the
+   game flags them as out of date
    (`TEST_RUNNER_SP_COMPARE_CDN=1` checks `flavors.plist` against the patch service; `FlavorTests`, the
    TOCs against it).
 5. Rebuild (`shims/build.sh`, `apps/companion/build.sh`), run the tests, try each affected flavor on a
@@ -229,13 +267,15 @@ again (over an hour for Retail on the headset). Don't change it casually.
   `DEVELOPER_ID_P12_BASE64`, `DEVELOPER_ID_P12_PASSWORD`, `ASC_API_KEY_P8_BASE64`, `ASC_API_KEY_ID`,
   `ASC_API_ISSUER_ID`, `SPARKLE_ED_PRIVATE_KEY`. A re-run after the Release exists fails on purpose;
   delete the Release first.
-- **slashplayed-companion** ships in prereleases only, until the owner sets the repository variable
-  `SP_RELEASE_COMPANION_RS` to `true`; then it rides the same release. `release.sh` makes the device kit
-  (`scripts/release/device-kit.sh`, attached as `slashplayed-device-kit.zip`), then `release.yml` builds the
-  tool against its hash (`companion-rs-build.yml`) and attaches the Windows and Linux archives, their attestations,
-  and their SHA256SUMS lines.
-  Volunteer prereleases: `companion-rs-prerelease.yml` (run by hand on a branch, which it builds), published only after the owner
-  approves the `prerelease` environment.
+- **The site without a release** (`.github/workflows/pages.yml`, run by hand from main): stages `site/` the
+  same way and redeploys it in the `github-pages` environment (main only, no secrets), carrying the live
+  appcast over byte for byte. It stops before deploying when that feed doesn't parse or lacks the latest
+  release, checks afterwards that the site serves the same feed, and shares `release.yml`'s concurrency
+  group so the two never race on it.
+- **The Windows and Linux companion** (`apps/companion-rs`, labeled experimental) rides every `v*` release.
+  `release.sh` makes the device kit (`scripts/release/device-kit.sh`, attached as `slashplayed-device-kit.zip`),
+  then `release.yml` builds the window and `slashplayed-cli` against its hash (`companion-rs-build.yml`) and
+  attaches the Windows and Linux archives, their attestations, and their SHA256SUMS lines.
 - **Locally**: `scripts/release/release.sh --unsigned` smoke-tests the whole script with no certificate.
   A signed local build (release candidates: `SP_RELEASE_VERSION=X.Y.Z-rc1`) uses `NOTARY_PROFILE` and
   the Sparkle key in the login keychain. `scripts/release/update-test.sh` tests a Sparkle update

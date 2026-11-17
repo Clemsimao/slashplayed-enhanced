@@ -11,9 +11,7 @@ installs the app, and **Slashplayed** on the device, which runs the game.
 The companion's setup assistant goes one step at a time and offers a fix for each problem it finds:
 Xcode, your Apple ID and team, your devices, LocalDevVPN, and which games go on each device. An
 optional step shows which games are installed on the Mac, if any. Then it installs Slashplayed on
-each device you pick, and a last optional step sets up
-[Update Games on This Device](#update-games-on-this-device). **Help > Setup Assistant…** runs the
-checks again later.
+each device you pick. **Help > Setup Assistant…** runs the checks again later.
 
 - **Xcode** needs an administrator's password once, the first time it's set up. After that, a
   standard macOS account works ([details](troubleshooting.md#xcode)).
@@ -27,9 +25,13 @@ checks again later.
 Open Slashplayed on the device and tap a game. The Mac can be asleep or away.
 
 Or press **Play** in the companion, with the game picked in the menu next to it. Battle.net doesn't
-need to be running. Play updates the app first when it needs to: after a game patch, after you
-change a device's games, and every 7 days on a free Apple ID. Keep the device awake while it works:
-unlock the iPad or iPhone and connect its cable, or wear the headset.
+need to be running. After a game patch, Play copies just the new game program to the device (about
+50 MB). It rebuilds the app itself only after a companion update, when you switch Apple ID or team,
+and when the app's provisioning profile is two days from running out (every 5 days or so on a free
+Apple ID, about once a year on a paid one). It installs the app again when the device's copy is
+missing or came from another Mac.
+Keep the device awake while it works: unlock the iPad or iPhone and connect its cable, or wear the
+headset.
 
 The first start of each game takes a few minutes while it fetches its data from Blizzard (about 2.5
 minutes to character select for Classic Era on an iPhone over Wi-Fi). After that, it fetches what
@@ -100,7 +102,9 @@ connection without switching away from the app.
 
 The first time, Slashplayed asks for your **Battle.net email and password**. It keeps them in the
 device's keychain (that device only, never synced) and signs the game in with them at every start.
-If your account has an authenticator, type its code on the hardware keyboard. To sign in with another
+If your account has an authenticator, type its code on a hardware keyboard, or on an iPad or iPhone,
+the on-screen keyboard: hold two fingers still on the game for a moment, lift them, and tap
+**Keyboard**. To sign in with another
 account, tap **Forget My Sign-In** in Settings on Slashplayed's start screen (the gear).
 
 If the device's sign-in stops working and the game is installed on the Mac, **Play with My Mac's
@@ -109,44 +113,21 @@ the game's Play button in Battle.net when the companion asks. The companion catc
 your Battle.net launch credentials to the device (it never reads their values), and closes the Mac's
 copy of the game. Your saved sign-in stays for the next Play.
 
-## Update Games on This Device
+## Game patches on the device
 
-With this on, a device updates a game itself when Blizzard patches it, with no Mac. It's off until
-you turn it on, per device, in the companion's Settings > **Updates on Devices**.
+A device updates a game itself when Blizzard patches it, with no Mac and nothing to set up, on a free
+Apple ID too. When you open a game and Blizzard has a newer build, Slashplayed says so before the game
+starts, downloads the new build's game program (about 50 MB; on cellular data or in Low Data Mode it
+asks first), and checks that this version of Slashplayed can run it. Tap **Update**, and a few seconds
+later the new version starts and fetches the patch's data as you play. **Play Anyway** plays the
+version you have.
 
-When you open a game and Blizzard has a newer build, Slashplayed says so before the game starts,
-downloads the new build's game program (about 50 MB; on cellular data or in Low Data Mode it asks
-first), and checks that this version of Slashplayed can run it. Tap **Update**, and a few seconds
-later the new version starts and fetches the patch's data as you play. With the setting off, the
-screen says to update on your Mac instead: the next Play from the companion installs the new build.
+The companion's next Play copies the new build too, if the device hasn't taken it yet. Whichever gets
+there first, the other leaves it alone, and a newer version the device took itself is never replaced by
+an older one.
 
-The device signs the new game program itself, so it needs a signing key from your team. Turning the
-setting on says what will be sent and asks first.
-
-- **A free Apple ID** sends a copy of the key the companion signs Slashplayed with: your team's
-  Apple Development certificate and its private key. macOS asks once to allow the export.
-- **A paid team** sends a certificate made only for Slashplayed, so nothing else on your Mac signs
-  with it and you can revoke it on its own. Set it up once in Settings > Updates on Devices:
-  1. **Make Certificate Request** saves `Slashplayed.certSigningRequest` to Downloads. Its key stays
-     in a keychain of the companion's own, which Xcode never uses.
-  2. On developer.apple.com, open Certificates, IDs & Profiles > Certificates, click +, choose Apple
-     Development, upload the request, and download the certificate.
-  3. **Choose Certificate…**, or drop it on the section. The companion checks it's for its key and
-     your team.
-
-  **Stop Using the Slashplayed Certificate** deletes it from the Mac, and each device deletes its
-  copy at its next Play or Update Client. Revoke it on developer.apple.com to end it everywhere at
-  once.
-
-At every Play and Update Client, the companion checks with Apple that the certificate hasn't expired
-or been revoked. If it has, nothing is sent, and the companion says what to make instead. When the
-key changes, a game the device updated with the old key is signed again with the new one at its next
-start; if no key on the device can sign it, the device plays the version the companion installed.
-
-On the device, the key lives in Slashplayed's keychain only (that device only, never synced or backed
-up) and signs only game programs. Turning the setting off deletes it at Slashplayed's next start;
-**Forget Signing Identity** in Slashplayed's Settings deletes it at once. More in
-[troubleshooting](troubleshooting.md#update-games-on-this-device).
+A game you haven't installed on the device reads **Install <game>** on Slashplayed's start screen: tap
+it to download the game program, with no Mac. The game then fetches its data as you play.
 
 ## Game files on the device
 
@@ -154,43 +135,31 @@ Each game's folder is in the Files app, under On My iPad, On My iPhone, or On My
 Slashplayed. A game's **Open in Files** in Slashplayed's Settings opens it.
 
 - **Settings:** edit `WTF/Config.wtf`.
-- **Addons:** put an addon's folder in `Interface/AddOns/`, making the folders if they aren't there.
+- **Addons:** put an addon's folder in `Interface/AddOns/`, making the folders if they aren't there. Or let
+  Slashplayed install and update them (below).
 - **Leave `Data/` and `.build.info` alone.** Deleting files there makes the game quit with
   ["installation is damaged"](troubleshooting.md#your-world-of-warcraft-installation-is-damaged).
 
-**Bagnon** downloads automatically the first time you start a game, combining your bags into one
-movable, resizable window. Drag its title bar to move it toward the center, and open its settings to
-adjust scale and columns. The download includes BagBrother and the bank and configuration modules.
-It is cached for later launches, including offline; a failed download lets you play and retries on
-the next launch. Saved settings and WoW's AddOns enable/disable choices are preserved.
+## Addons
 
-Forever includes **SPTouchBars**, installed automatically when you start the game. Open **WoW Settings >
-AddOns > SPTouchBars > Edit layout**, or type `/sptouch`, to choose how many circular spell buttons appear, move and resize them, and arrange
-the bottom utility bar. The new buttons start empty and use their own saved assignments: drag spells
-from the spellbook, items from your bags, and macros from the macro window while editing. The normal
-player action bars are hidden by default; **More... > Default bars: hidden / shown** restores them for setup.
-Pet, stance, vehicle, and special-action controls stay available. Ctrl, Alt, and Shift show alternate
-spells; the circular arrows button switches the main spell set. The selected icon turns teal in the
-editor. Buttons have soft halos and show a gold tint when pressed. Drag any utility icon to move the
-whole bar, and choose its icon count, rows, shared size, and spacing with the native sliders and steppers.
-The compact inspector follows the selected control, with **Spells**, **Utility**, and **Controls** tabs.
-**Border & glow** and **Visibility** open the selected group's options; **More...** holds modifier layers
-and reset/clear actions. **Preview** shows the play appearance while actions remain disabled. **Undo**
-restores the current editing session; **Done** keeps changes.
-Separate **Interact** and **Target** controls can each be moved, resized, or turned off in Settings.
-Interact follows the game's talk/loot/attack behavior; **Nearby interaction** enables detection for
-touch input while the control is active. Move close and face the NPC or corpse. Target cycles
-enemies (Shift cycles backward). Ctrl, Alt, and Shift each have their own layer toggle in Settings
-and the editor; turn off any modifier layer you want to use for macros instead. **Quest steps** makes
-Interact open, accept, continue, and turn in quests in list order, one step per press. Multiple reward
-choices require a manual selection before the turn-in press. **Outline colour** opens the native colour
-picker. The **Spell buttons** and **Utility bar** settings pages have separate colour, outline opacity,
-and glow sliders, plus whole-bar and empty-slot visibility toggles. Empty slots hide during play by
-default and return in Edit layout. The movable **Map** button toggles the world map and starts near
-the minimap; **Map** and **Set arrows** have independent on/off switches. The set arrows have a
-transparent background. New app
-builds update the addon while keeping your saved layout. Disable it in WoW's AddOns list if you prefer
-the standard bars.
+Each game's **Addons** in Slashplayed's Settings (the gear on the start screen) lists the addons in its
+`Interface/AddOns/` folder:
+
+- **Browse the Catalog** installs addons from [Slashplayed's catalog](https://github.com/paulstraw/slashplayed-addons),
+  filtered to the game. Each one downloads from where its author publishes it (GitHub, WoWInterface, or
+  Tukui) and is checked against the catalog before it's installed. When an addon needs another one the
+  catalog has, Slashplayed offers to install both.
+- **Add from GitHub** installs the latest release of a repository that isn't in the catalog, entered as
+  `owner/repo` (`Stanzilla/AdvancedInterfaceOptions`) or its link, and updates it with each new release.
+- **Update**, **Update All**, and **Remove** work on what Slashplayed installed. With **Update
+  Automatically** on, Slashplayed updates those addons itself when it opens, at most every few hours.
+- Addons you added in Files are listed as updated by hand. One the catalog has (matched by its folder
+  names) can be updated from it: its Update replaces your copy with the catalog's.
+- **Open AddOns Folder** opens the folder in Files.
+
+Changes apply the next time the game starts. Addons only on CurseForge or Wago aren't in the catalog; add
+those in Files. When you quit a game (Exit Game or Quit), Slashplayed opens again on its start screen, so
+you can change addons and play again without closing the app. That needs LocalDevVPN on, as playing does.
 
 ## Copying game files from the Mac
 
@@ -210,7 +179,10 @@ across three zones.
 A free Apple ID (a Personal Team) plays every game, with limits:
 
 - The app's signature lasts **7 days**. The companion warns two days ahead and signs it again at the
-  next Play.
+  next Play. Or, optionally, sign in to Apple on the device (Slashplayed's **Settings > Signing > Sign In
+  to Apple…**), and Slashplayed renews its own signing when a game starts in the last 3 days. That's a
+  second sign-in to your Apple ID, through a third-party server, as sideloading tools do, so use a
+  secondary Apple ID on the team if you can. Your password isn't kept.
 - The first launch asks you to trust your Apple ID on the device.
 - A free team can have only a few apps on a device.
 
@@ -220,21 +192,11 @@ A paid **Apple Developer Program** membership signs for a year, with none of tho
 ## Settings
 
 - **The companion** (⌘,): team, bundle ID prefix, devices and their games, copying game files,
-  updating games on devices, the game install, and update checks. Changing the team or bundle ID
+  the game install, and update checks. Changing the team or bundle ID
   prefix makes a new app on each device, with no game files: they're fetched or copied again.
-- **The device** (the gear on Slashplayed's start screen): Controls, Display, Games, Account, and About.
-  iPad uses a category sidebar; narrow windows use normal back navigation. Control instructions stay
-  visible below their settings. Each game's build, region, Open in Files, and Reset Game Settings are
-  under Games; the saved sign-in is under Account, and the signing identity under Games > Game Updates.
-
-All supported resolutions appear directly in WoW's **Graphics > Resolution**. On a full-screen
-12.9-inch iPad Pro, the choices are **1366×1024**, **1920×1440**, **2560×1920**, and **2732×2048**.
-The initial default remains the lower-power mode; once you choose another, the game remembers it
-for the next launch. Existing resolution choices and older scale preferences are kept when updating.
-**Settings > Display** explains the available choices with pixel dimensions and battery/detail
-tradeoffs. Higher resolutions usually use more GPU power. Dimensions follow the game window's
-aspect ratio and swap when you rotate into portrait. WoW's separate Render Scale slider still
-controls how sharply the 3D world is rendered within the chosen resolution.
+- **The device** (the gear on Slashplayed's start screen): the saved sign-in, each game's build and
+  where it came from, its region, its addons, Open in Files, Reset Game Settings, and Display (the render
+  scale).
 
 ## Updates
 
@@ -251,9 +213,11 @@ update". If no update is out, the companion's **Report It…** opens a pre-fille
   [Details](troubleshooting.md#closing-the-window).
 - **LocalDevVPN has to be on at every start.** Slashplayed's helper attaches to the game for a second
   or two to prepare its code, and reaches the device's developer services through LocalDevVPN. If
-  it's off, Slashplayed opens LocalDevVPN and starts the game once it's on.
-- **No on-screen keyboard in the game.** Chat and authenticator codes need a hardware keyboard.
-  [Details](troubleshooting.md#no-on-screen-keyboard).
+  it's off, Slashplayed opens LocalDevVPN and starts the game once it's on. LocalDevVPN works only on
+  Wi-Fi: on cellular data, turn on Airplane Mode until the game starts loading, then turn it off again.
+- **The game's on-screen keyboard is on an iPad or iPhone only.** On a Vision Pro, chat and
+  authenticator codes need a hardware keyboard.
+  [Details](troubleshooting.md#the-on-screen-keyboard).
 - **A mouse on an iPhone needs AssistiveTouch** for its cursor.
   [Details](troubleshooting.md#no-cursor-with-a-mouse-on-an-iphone).
 - **No intro movie on a game's first launch.** On an empty device the intro never plays, so
