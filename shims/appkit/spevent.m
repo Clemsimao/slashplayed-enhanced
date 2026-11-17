@@ -316,7 +316,39 @@ static void sp_key_input(unsigned usage, NSString *characters, NSString *ignorin
     }
 }
 
+// The hardware keyboard's layout as iOS types it (Settings > General > Keyboard > Hardware Keyboard): per
+// Mac key code, the character the key gives alone and with Shift, learned from each key pressed.
+// UCKeyTranslate (the CoreServices shim) asks sp_layout_char, so the client's key names and text follow
+// an AZERTY or QWERTZ keyboard as on a Mac set to that layout; a key never pressed keeps the US table.
+static uint16_t sp_layout[128][2];
+__attribute__((visibility("default"))) uint16_t sp_layout_char(uint16_t mac, int shift) {
+    return mac < 128 ? sp_layout[mac][shift ? 1 : 0] : 0;
+}
+
+static uint16_t sp_layout_one(NSString *s) {
+    if (s.length != 1) return 0;
+    unichar c = [s characterAtIndex:0];
+    return c >= 0x20 && c != 0x7F && c < 0xF700 ? c : 0;  // printable, not a function key's
+}
+
+static void sp_layout_learn(UIKey *key) {
+    unsigned usage = (unsigned)key.keyCode;
+    unsigned short mac = usage < 256 ? sp_hid_to_mac[usage] : 0;
+    if ((!mac && usage != 0x04) || mac >= 128) return;
+    UIKeyModifierFlags other = UIKeyModifierControl | UIKeyModifierAlternate | UIKeyModifierCommand;
+    if (key.modifierFlags & other) return;
+    BOOL shift = (key.modifierFlags & UIKeyModifierShift) != 0;
+    uint16_t alone = sp_layout_one(key.charactersIgnoringModifiers), typed = sp_layout_one(key.characters);
+    if (!shift) {
+        if (typed) sp_layout[mac][0] = typed;
+        else if (alone) sp_layout[mac][0] = alone;
+    } else if (typed) {
+        sp_layout[mac][1] = typed;
+    }
+}
+
 static void sp_key(UIKey *key, BOOL down) {
+    if (down) sp_layout_learn(key);
     sp_key_input((unsigned)key.keyCode, key.characters, key.charactersIgnoringModifiers, down, NO);
 }
 
