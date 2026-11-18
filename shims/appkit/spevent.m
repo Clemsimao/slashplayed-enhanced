@@ -117,9 +117,40 @@ static SPEvent *sp_event(NSUInteger type) {
 }
 
 // Unlogged: the on-screen keyboard's presses (spkeyboard.m), which are what was typed.
+// A press that moved the cursor waits until sp_hold_until (sp_mouse_button), with every mouse event
+// after it, so the client has drawn a few frames with the cursor there first: it finds what's under the
+// cursor (a player, an NPC, a map zone) as it draws, not when the click comes. sp_hold_flush lets them go.
+static NSTimeInterval sp_hold_until;
+static NSMutableArray<SPEvent *> *sp_held;
+
+static BOOL sp_is_mouse(NSUInteger type) {
+    return (type >= SPLeftMouseDown && type <= SPRightMouseDragged) || type == SPScrollWheel ||
+           (type >= SPOtherMouseDown && type <= SPOtherMouseDragged);
+}
+
 static void sp_post_quiet(SPEvent *e) {
     if (!sp_events) sp_events = [NSMutableArray array];
+    if (sp_hold_until > 0 && sp_is_mouse(e->type)) {
+        if (!sp_held) sp_held = [NSMutableArray array];
+        [sp_held addObject:e];
+        return;
+    }
     [sp_events addObject:e];
+}
+
+static void sp_hold_flush(void) {
+    if (sp_hold_until <= 0 || NSProcessInfo.processInfo.systemUptime < sp_hold_until) return;
+    sp_hold_until = 0;
+    if (!sp_events) sp_events = [NSMutableArray array];
+    if (sp_held.count) [sp_events addObjectsFromArray:sp_held];
+    [sp_held removeAllObjects];
+}
+
+static NSTimeInterval sp_tap_delay(void) {
+    static double d = -1;
+    if (d < 0) d = (getenv("SP_TAP_DELAY_MS") ? atof(getenv("SP_TAP_DELAY_MS")) : 60) / 1000;
+    if (d < 0) d = 0;
+    return d;
 }
 
 static unichar sp_function_char(unsigned short mac);
@@ -490,7 +521,13 @@ static void sp_set_mouse_frozen(BOOL frozen) {
 // by both the touch's button mask and GCMouse.
 static void sp_mouse_button(NSInteger button, BOOL down, CGPoint p) {
     if (!!(sp_mouse_buttons & (1u << button)) == down) return;
-    if (p.x != sp_pointer.x || p.y != sp_pointer.y) sp_mouse_moved_to(p, sp_motion_type(), YES);
+    if (p.x != sp_pointer.x || p.y != sp_pointer.y) {
+        sp_mouse_moved_to(p, sp_motion_type(), YES);
+        // The press waits for the client to see the cursor here (sp_hold_until). Not mid-mouselook,
+        // where the cursor doesn't move.
+        if (down && !sp_mouse_frozen && sp_tap_delay() > 0)
+            sp_hold_until = NSProcessInfo.processInfo.systemUptime + sp_tap_delay();
+    }
     p = sp_mouse;  // differs while frozen
     NSUInteger type = button == 0 ? (down ? SPLeftMouseDown : SPLeftMouseUp)
                     : button == 1 ? (down ? SPRightMouseDown : SPRightMouseUp)
@@ -1750,6 +1787,7 @@ static void sp_quit_drill(NSApplication *app) {
     // Pump UIKit only when nothing is queued, so a burst of input drains before more is collected.
     if (!sp_events.count) sp_uikit_pump(NO);
     sp_window_track_scene();
+    sp_hold_flush();
     sp_key_repeats();
     sp_touchpad_poll();
     for (NSUInteger i = 0; i < sp_events.count; i++) {

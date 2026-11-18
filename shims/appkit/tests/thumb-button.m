@@ -69,6 +69,8 @@ static void sp_test_tap(SPInputView *view, NSArray<SPTestTouch *> *others) {
 static void sp_test_run(SPInputView *view, SPThumbButton *thumb) {
     // The simulator lists an MFi gamepad of its own, which would hide every touch control under test.
     setenv("SP_PAD_TOUCH", "1", 1);
+    // The checks read each tap's events at once: no wait for the cursor (sp_hold_until).
+    setenv("SP_TAP_DELAY_MS", "0", 1);
     NSUserDefaults *defaults = NSUserDefaults.standardUserDefaults;
     [defaults removeObjectForKey:sp_thumb_enabled_key];
     [defaults removeObjectForKey:sp_thumb_position_key];
