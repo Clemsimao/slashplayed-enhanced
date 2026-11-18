@@ -264,7 +264,8 @@ CFArrayRef sp_MTLCopyAllDevicesWithObserver(void **observer, id handler) {
 void sp_MTLRemoveDeviceObserver(id observer) __asm__("_MTLRemoveDeviceObserver");
 void sp_MTLRemoveDeviceObserver(id observer) {}
 """,
-    # UCKeyTranslate for the US layout, from a table instead of the uchr data (see Carbon above).
+    # UCKeyTranslate: the hardware keyboard's layout as the AppKit shim learned it from the keys pressed
+    # (spevent.m's sp_layout_char), else the US layout, from a table instead of the uchr data (see Carbon above).
     # Shift and caps lock apply; dead keys and option/control layers don't exist here.
     "CoreServices": """
 // Virtual key code -> (unshifted, shifted) character, for the US ANSI layout.
@@ -306,7 +307,18 @@ int32_t sp_UCKeyTranslate(const void *layout, uint16_t key, uint16_t action, uin
                           unsigned long maxLen, unsigned long *actualLen, uint16_t *chars) {
     SP_LOG_ONCE("UCKeyTranslate");
     if (deadKeyState) *deadKeyState = 0;
-    uint16_t c = key < 128 ? sp_us_keys[key][(modifiers & 0x02) != 0] : 0;  // shiftKey >> 8
+    // The hardware keyboard's own layout first, as the AppKit shim learned it from the keys pressed
+    // (spevent.m's sp_layout_char); the US table for a key not pressed yet.
+    static uint16_t (*learned)(uint16_t, int);
+    static int looked;
+    if (!looked) { learned = (uint16_t (*)(uint16_t, int))dlsym(RTLD_DEFAULT, "sp_layout_char"); looked = 1; }
+    int shift = (modifiers & 0x02) != 0;  // shiftKey >> 8
+    uint16_t c = learned && key < 128 ? learned(key, shift) : 0;
+    if (!c && shift && learned && key < 128) {
+        uint16_t alone = learned(key, 0);  // a letter whose Shift wasn't seen yet
+        if (alone >= 'a' && alone <= 'z') c = alone - ('a' - 'A');
+    }
+    if (!c) c = key < 128 ? sp_us_keys[key][shift] : 0;
     if ((modifiers & 0x04) && c >= 'a' && c <= 'z') c -= 'a' - 'A';           // alphaLock >> 8
     unsigned long n = c && maxLen ? 1 : 0;
     if (n) chars[0] = c;
